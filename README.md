@@ -1,6 +1,6 @@
 # 🍌 Banana Pro 节点说明书
 
-欢迎使用 **Banana Pro**自定义节点！它是初阳为**星核AI（ai.aicy168.top）**专门打造的香蕉2Pro超级节点。
+欢迎使用 **Banana Pro**自定义节点！它是初阳为星核AI（ai.aicy168.top）专门打造的香蕉2Pro超级节点。
 
 ## ✨ 功能亮点
 - 🔑 **多 Key 并发调度**：支持最多 5 把 API Key，并行请求 `Nano Banana 2` 服务；可为每把 Key 选择独立宽高比，或继承全局默认值。
