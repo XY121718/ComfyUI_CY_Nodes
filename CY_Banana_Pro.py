@@ -465,6 +465,8 @@ class CYGeminiRelay:
             dispatch_prompts = [prompt_list[0]]
 
         provided_images = []
+        primary_image_indices = [None] * 5
+        global_image_indices = []
         for idx, name in enumerate(self.IMAGE_INPUT_NAMES):
             value = self._get_input_value(
                 inputs,
@@ -473,21 +475,26 @@ class CYGeminiRelay:
             )
             if value is not None:
                 provided_images.append(value)
+                image_idx = len(provided_images) - 1
+                if idx < 5:
+                    primary_image_indices[idx] = image_idx
+                else:
+                    global_image_indices.append(image_idx)
 
         image_groups = None
         if provided_images and split_mode:
             target_pairs = len(dispatch_prompts)
             if target_pairs < 1:
                 raise ValueError("请至少输入一条提示词用于拆分。")
-            if len(provided_images) < target_pairs:
-                raise ValueError(
-                    f"{target_pairs} 条提示词需要至少 {target_pairs} 张参考图，但仅提供了 {len(provided_images)} 张。"
-                )
-            if len(provided_images) > target_pairs:
-                print(
-                    f"[WARN] 提供了 {len(provided_images)} 张图片，仅使用前 {target_pairs} 张与提示词对应，其余将被忽略。"
-                )
-            image_groups = [[idx] for idx in range(target_pairs)]
+            for port_idx in range(target_pairs):
+                if primary_image_indices[port_idx] is None:
+                    raise ValueError(f"图像输入{port_idx + 1} 是必填项，请为第 {port_idx + 1} 个输出提供参考图。")
+            image_groups = []
+            for port_idx in range(target_pairs):
+                indices = [primary_image_indices[port_idx]]
+                if global_image_indices:
+                    indices.extend(global_image_indices)
+                image_groups.append(indices)
 
         exec_configs = configs_to_use
         exec_prompts = dispatch_prompts
