@@ -20,6 +20,7 @@ EDIT_ENDPOINT = "https://ai.aicy168.top/v1/images/edits"
 TASK_ENDPOINT = "https://ai.aicy168.top/v1/images/tasks"
 REQUEST_TIMEOUT = 300
 CATEGORY = "初阳"
+DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
 CONFIG = configparser.ConfigParser()
 if CONFIG_PATH.exists():
@@ -69,7 +70,7 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
-    "Nano Banana 2": "nano-banana-2",
+    "nano-banana-2": "nano-banana-2",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -300,14 +301,14 @@ class CYGeminiRelay:
     def __init__(self):
         self._cached_outputs = [None] * len(self.RETURN_TYPES)
 
-    IMAGE_INPUT_NAMES = [f"图片{i}" for i in range(1, 9)]
+    IMAGE_INPUT_NAMES = [f"图片输入{i}" for i in range(1, 9)]
     IMAGE_LEGACY_NAMES = [f"image_{i}" for i in range(1, 9)]
 
     MODEL_MAP = DEFAULT_MODEL_MAP
     MODEL_OPTIONS = list(MODEL_MAP.keys())
     ASPECT_OPTIONS = list(ASPECT_DISPLAY_MAP.keys())
     ASPECT_OVERRIDE_OPTIONS = ["使用全局"] + ASPECT_OPTIONS
-    IMAGE_SIZE_OPTIONS = list(IMAGE_SIZE_DISPLAY_MAP.keys())
+    IMAGE_SIZE_OPTIONS = [size for size in IMAGE_SIZE_DISPLAY_MAP.keys() if size != "Auto"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -315,18 +316,37 @@ class CYGeminiRelay:
         for idx, name in enumerate(cls.IMAGE_INPUT_NAMES):
             optional_inputs[name] = (
                 "IMAGE",
-                {"forceInput": idx != 0, "label": name},
+                {
+                    "forceInput": idx != 0,
+                    "label": name,
+                    "fold_group": "image_inputs",
+                    "fold_label": "图片输入",
+                    "fold_collapsed": True,
+                },
             )
 
         for idx in range(2, 6):
             key_label = f"Key{idx}"
             optional_inputs[key_label] = (
                 "STRING",
-                {"multiline": False, "default": CONFIG["DEFAULT"].get(f"api_key_{idx}", ""), "label": f"🔑 {key_label}"},
+                {
+                    "multiline": False,
+                    "default": CONFIG["DEFAULT"].get(f"api_key_{idx}", ""),
+                    "label": key_label,
+                    "fold_group": "extra_keys",
+                    "fold_label": "额外 Key",
+                    "fold_collapsed": True,
+                },
             )
             optional_inputs[f"宽高比（Key{idx}）"] = (
                 cls.ASPECT_OVERRIDE_OPTIONS,
-                {"default": cls.ASPECT_OVERRIDE_OPTIONS[0], "label": f"📐 宽高比（Key{idx}）"},
+                {
+                    "default": cls.ASPECT_OVERRIDE_OPTIONS[0],
+                    "label": f"宽高比（Key{idx}）",
+                    "fold_group": "extra_aspect",
+                    "fold_label": "独立宽高比",
+                    "fold_collapsed": True,
+                },
             )
 
         for idx in range(len(cls.RETURN_TYPES)):
@@ -337,19 +357,25 @@ class CYGeminiRelay:
 
         return {
             "required": {
-                "提示词": ("STRING", {"multiline": True, "default": "A cinematic poster", "label": "提示词"}),
-                "Key1": ("STRING", {"multiline": False, "label": "🔑 Key1", "default": CONFIG["DEFAULT"].get("api_key", "")}),
-                "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "🧠 模型"}),
-                "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "📐 默认宽高比"}),
-                "图像尺寸": (cls.IMAGE_SIZE_OPTIONS, {"default": cls.IMAGE_SIZE_OPTIONS[0], "label": "🖼️ 图像尺寸"}),
+                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
+                "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
+                "图像尺寸": (cls.IMAGE_SIZE_OPTIONS, {"default": cls.IMAGE_SIZE_OPTIONS[0], "label": "图像尺寸"}),
                 "匹配参考尺寸": (
                     "BOOLEAN",
-                    {"default": True, "label": "📏 匹配参考尺寸", "label_on": "开启", "label_off": "关闭"},
+                    {"default": False, "label": "匹配参考尺寸", "label_on": "开启", "label_off": "关闭"},
                 ),
-                "并发请求数": ("INT", {"default": 1, "min": 1, "max": 5, "step": 1, "label": "⚙️ 并发请求数"}),
                 "按行拆分提示词": (
                     "BOOLEAN",
-                    {"default": False, "label": "✂️ 按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
+                    {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
+                ),
+                "Key1": (
+                    "STRING",
+                    {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
+                ),
+                "刷新": (
+                    "BOOLEAN",
+                    {"default": False, "label": "刷新", "label_on": "开启", "label_off": "关闭"},
                 ),
             },
             "optional": optional_inputs,
@@ -370,7 +396,13 @@ class CYGeminiRelay:
             saved = CONFIG["DEFAULT"].get(field_name, "").strip()
             return saved
 
-        prompt = self._get_input_value(inputs, "提示词", "prompt", default="")
+        prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
+        split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
+        refresh_mode = bool(self._get_input_value(inputs, "刷新", "refresh_mode", default=False))
+
+        if not refresh_mode:
+            self._reset_cached_outputs()
+
         api_key_clean = resolve_key("api_key", "Key1", "api_key")
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
@@ -378,10 +410,8 @@ class CYGeminiRelay:
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
         image_size = self._get_input_value(inputs, "图像尺寸", "image_size", default=self.IMAGE_SIZE_OPTIONS[0])
-        match_reference_size = bool(self._get_input_value(inputs, "匹配参考尺寸", "match_reference_size", default=True))
-        request_count = self._get_input_value(inputs, "并发请求数", "request_count", default=1)
-        enable_prompt_split = bool(
-            self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False)
+        match_reference_size = bool(
+            self._get_input_value(inputs, "匹配参考尺寸", "match_reference_size", default=False)
         )
 
         extra_api_keys = []
@@ -405,9 +435,8 @@ class CYGeminiRelay:
         aspect_value = resolve_display_value(aspect_ratio, ASPECT_DISPLAY_MAP, "aspect ratio")
         image_size_value = resolve_display_value(image_size, IMAGE_SIZE_DISPLAY_MAP, "image size")
         resolved_size = resolve_image_size(image_size_value, aspect_value) if image_size_value != "Auto" else None
-        request_count = max(1, min(5, int(request_count)))
-
-        prompts = self._split_prompts(prompt) if enable_prompt_split else []
+        prompt_segments = self._split_prompts(prompt) if split_mode else []
+        prompt_list = prompt_segments if prompt_segments else [prompt]
 
         extra_channel_args = (
             (extra_api_keys[0], extra_aspects[0]),
@@ -419,23 +448,18 @@ class CYGeminiRelay:
             api_key_clean,
             extra_channel_args,
         )
-        prompt_list = prompts or [prompt]
+        if not channel_configs:
+            raise ValueError("Key1 是必填项。")
 
-        if enable_prompt_split and prompts:
-            if len(prompts) > len(channel_configs):
-                raise ValueError(f"{len(prompts)} 条提示词需要至少 {len(prompts)} 个 Key，但只提供了 {len(channel_configs)} 个。")
-            configs_to_use = channel_configs[: len(prompts)]
-            dispatch_prompts = prompt_list
-        elif enable_prompt_split:
-            if request_count > len(channel_configs):
+        if split_mode:
+            needed_channels = len(prompt_list)
+            if needed_channels > len(channel_configs):
                 raise ValueError(
-                    f"并发次数 {request_count} 需要至少 {request_count} 个 Key，但只提供了 {len(channel_configs)} 个。"
+                    f"{needed_channels} 条提示词需要 {needed_channels} 个 Key，但只提供了 {len(channel_configs)} 个。"
                 )
-            configs_to_use = channel_configs[:request_count]
-            dispatch_prompts = [prompt_list[0]] * len(configs_to_use)
+            configs_to_use = channel_configs[:needed_channels]
+            dispatch_prompts = prompt_list
         else:
-            if not channel_configs:
-                raise ValueError("Key1 是必填项。")
             configs_to_use = [channel_configs[0]]
             dispatch_prompts = [prompt_list[0]]
 
@@ -450,15 +474,17 @@ class CYGeminiRelay:
                 provided_images.append(value)
 
         image_groups = None
-        if provided_images and enable_prompt_split and prompts:
+        if provided_images and split_mode:
             target_pairs = len(dispatch_prompts)
+            if target_pairs < 1:
+                raise ValueError("请至少输入一条提示词用于拆分。")
             if len(provided_images) < target_pairs:
                 raise ValueError(
-                    f"{target_pairs} prompts require at least {target_pairs} reference images, only {len(provided_images)} provided."
+                    f"{target_pairs} 条提示词需要至少 {target_pairs} 张参考图，但仅提供了 {len(provided_images)} 张。"
                 )
             if len(provided_images) > target_pairs:
                 print(
-                    f"[WARN] Provided {len(provided_images)} images but only {target_pairs} prompts; extra images will be ignored."
+                    f"[WARN] 提供了 {len(provided_images)} 张图片，仅使用前 {target_pairs} 张与提示词对应，其余将被忽略。"
                 )
             image_groups = [[idx] for idx in range(target_pairs)]
 
@@ -467,18 +493,38 @@ class CYGeminiRelay:
         exec_image_groups = image_groups
         output_positions = None
 
-        if image_groups:
+        if refresh_mode:
             refresh_indices = self._collect_refresh_requests(inputs)
-            refresh_indices = [idx for idx in refresh_indices if idx < len(exec_configs)]
-            if refresh_indices:
+            refresh_indices = [idx for idx in refresh_indices if idx < len(dispatch_prompts)]
+            has_cache = self._has_cached_outputs()
+            if not refresh_indices:
+                if has_cache:
+                    return tuple(self._cached_outputs)
+                self._reset_cached_outputs()
+                refresh_mode = False
+            else:
                 exec_configs = [configs_to_use[idx] for idx in refresh_indices]
                 exec_prompts = [dispatch_prompts[idx] for idx in refresh_indices]
-                exec_image_groups = [image_groups[idx] for idx in refresh_indices]
-                output_positions = refresh_indices
+                if image_groups:
+                    exec_image_groups = [image_groups[idx] for idx in refresh_indices]
+                    output_positions = refresh_indices
+                else:
+                    exec_image_groups = image_groups
+
+        if not refresh_mode:
+            output_positions = list(range(len(self.RETURN_TYPES)))
 
         if provided_images:
             if not exec_configs:
                 raise ValueError("没有需要刷新的输出，至少选择一个有效端口。")
+
+            if output_positions:
+                updated_ports = output_positions
+            elif exec_image_groups:
+                updated_ports = list(range(len(exec_image_groups)))
+            else:
+                updated_ports = [0]
+
             edit_result = self._run_edit(
                 api_key_clean,
                 model_value,
@@ -491,7 +537,9 @@ class CYGeminiRelay:
                 image_groups=exec_image_groups,
                 output_positions=output_positions,
             )
-            return self._ensure_port_tuple(edit_result)
+            return self._ensure_port_tuple(edit_result, updated_ports=updated_ports, use_cache_fallback=refresh_mode)
+
+        updated_ports = output_positions if output_positions else [0]
 
         generation_result = self._run_generation(
             api_key_clean,
@@ -503,7 +551,7 @@ class CYGeminiRelay:
             1,
             configs_to_use,
         )
-        return self._ensure_port_tuple(generation_result)
+        return self._ensure_port_tuple(generation_result, updated_ports=updated_ports, use_cache_fallback=refresh_mode)
 
     def _run_generation(
         self,
@@ -672,11 +720,15 @@ class CYGeminiRelay:
         return resolve_display_value(selection, ASPECT_DISPLAY_MAP, "aspect ratio override")
 
     @staticmethod
-    def _split_prompts(prompt: str):
-        if not prompt or "\n" not in prompt:
+    def _split_prompts(prompt: str, max_segments: int = 5):
+        if not prompt:
             return []
-        parts = [p.strip() for p in prompt.splitlines() if p.strip()]
-        return parts if len(parts) > 1 else []
+        parts = [p.strip() for p in re.split(r"(?:\r?\n){2,}", prompt) if p.strip()]
+        if not parts:
+            return []
+        if len(parts) > max_segments:
+            print(f"[WARN] 仅保留前 {max_segments} 段提示词，多余的段落将被忽略。")
+        return parts[:max_segments]
 
     def _dispatch_requests(
         self,
@@ -776,10 +828,11 @@ class CYGeminiRelay:
                 return source[name]
         return default
 
-    def _ensure_port_tuple(self, result):
+    def _ensure_port_tuple(self, result, updated_ports=None, use_cache_fallback=True):
         if not hasattr(self, "_cached_outputs"):
             self._cached_outputs = [None] * len(self.RETURN_TYPES)
 
+        refreshed = set(updated_ports or [])
         if len(result) == len(self.RETURN_TYPES):
             outputs = list(result)
         else:
@@ -793,5 +846,14 @@ class CYGeminiRelay:
                 self._cached_outputs[idx] = value
                 final_outputs.append(value)
             else:
-                final_outputs.append(self._cached_outputs[idx])
+                if use_cache_fallback or idx not in refreshed:
+                    final_outputs.append(self._cached_outputs[idx])
+                else:
+                    final_outputs.append(None)
         return tuple(final_outputs)
+
+    def _reset_cached_outputs(self):
+        self._cached_outputs = [None] * len(self.RETURN_TYPES)
+
+    def _has_cached_outputs(self):
+        return any(entry is not None for entry in getattr(self, "_cached_outputs", []))
