@@ -70,6 +70,7 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
+    "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
 }
 
@@ -507,9 +508,9 @@ class CYGeminiRelay:
                 exec_prompts = [dispatch_prompts[idx] for idx in refresh_indices]
                 if image_groups:
                     exec_image_groups = [image_groups[idx] for idx in refresh_indices]
-                    output_positions = refresh_indices
                 else:
                     exec_image_groups = image_groups
+                output_positions = refresh_indices
 
         if not refresh_mode:
             output_positions = list(range(len(self.RETURN_TYPES)))
