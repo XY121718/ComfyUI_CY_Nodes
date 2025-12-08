@@ -295,14 +295,14 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
 class CYGeminiRelay:
     DISPLAY_NAME = "Banana Pro"
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("输出图1", "输出图2", "输出图3", "输出图4", "输出图5")
+    RETURN_NAMES = ("输出1", "输出2", "输出3", "输出4", "输出5")
     FUNCTION = "run"
     CATEGORY = CATEGORY
 
     def __init__(self):
         self._cached_outputs = [None] * len(self.RETURN_TYPES)
 
-    IMAGE_INPUT_NAMES = [f"图片输入{i}" for i in range(1, 9)]
+    IMAGE_INPUT_NAMES = [f"输入{i}" for i in range(1, 9)]
     IMAGE_LEGACY_NAMES = [f"image_{i}" for i in range(1, 9)]
 
     MODEL_MAP = DEFAULT_MODEL_MAP
@@ -317,13 +317,7 @@ class CYGeminiRelay:
         for idx, name in enumerate(cls.IMAGE_INPUT_NAMES):
             optional_inputs[name] = (
                 "IMAGE",
-                {
-                    "forceInput": idx != 0,
-                    "label": name,
-                    "fold_group": "image_inputs",
-                    "fold_label": "图片输入",
-                    "fold_collapsed": True,
-                },
+                {"forceInput": idx != 0, "label": name},
             )
 
         for idx in range(2, 6):
@@ -359,6 +353,10 @@ class CYGeminiRelay:
         return {
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                "Key1": (
+                    "STRING",
+                    {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
+                ),
                 "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
                 "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
                 "图像尺寸": (cls.IMAGE_SIZE_OPTIONS, {"default": cls.IMAGE_SIZE_OPTIONS[0], "label": "图像尺寸"}),
@@ -369,10 +367,6 @@ class CYGeminiRelay:
                 "按行拆分提示词": (
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
-                ),
-                "Key1": (
-                    "STRING",
-                    {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
                 ),
                 "刷新": (
                     "BOOLEAN",
