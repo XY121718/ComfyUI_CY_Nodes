@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
 
 import numpy as np
 import requests
@@ -15,9 +16,10 @@ from PIL import Image, ImageOps
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-API_ENDPOINT = "https://ai.aicy168.top/v1/images/generations"
-EDIT_ENDPOINT = "https://ai.aicy168.top/v1/images/edits"
-TASK_ENDPOINT = "https://ai.aicy168.top/v1/images/tasks"
+RELAY_BASE_URL = "https://ai.aicy168.top"
+API_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/generations"
+EDIT_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/edits"
+TASK_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/tasks"
 REQUEST_TIMEOUT = 300
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
@@ -100,6 +102,13 @@ IMAGE_SIZE_DISPLAY_MAP = {
     "2K": "2K",
     "4K": "4K",
 }
+
+
+def _extract_base_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    return url.rstrip("/")
 
 def smart_resize(image, target_width, target_height):
     """Resize and center-crop while preserving quality."""
@@ -377,6 +386,7 @@ class CYGeminiRelay:
         }
 
     def run(self, **inputs):
+        self._assert_allowed_relay()
         cfg_dirty = False
 
         def resolve_key(field_name: str, primary_name: str, legacy_name: Optional[str] = None):
@@ -554,6 +564,17 @@ class CYGeminiRelay:
             configs_to_use,
         )
         return self._ensure_port_tuple(generation_result, updated_ports=updated_ports, use_cache_fallback=refresh_mode)
+
+    def _assert_allowed_relay(self):
+        """Ensure all API endpoints still point to the official relay."""
+        allowed_base = _extract_base_url(RELAY_BASE_URL)
+        endpoints = (API_ENDPOINT, EDIT_ENDPOINT, TASK_ENDPOINT)
+        for endpoint in endpoints:
+            current_base = _extract_base_url(endpoint)
+            if current_base != allowed_base:
+                raise ValueError(
+                    f"当前中转站 {current_base} 不受支持，请使用 {allowed_base}。"
+                )
 
     def _run_generation(
         self,
