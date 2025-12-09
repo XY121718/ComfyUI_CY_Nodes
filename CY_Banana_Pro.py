@@ -72,8 +72,10 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
-    "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
+    "nano-banana-2-4k": "nano-banana-2-4k",
+    "nano-banana-2-2k": "nano-banana-2-2k",
+    "nano-banana": "nano-banana",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -162,6 +164,8 @@ def resolve_display_value(selection: str, mapping: dict, label: str):
 
 
 def extract_image_entries(response_json):
+    if isinstance(response_json, list):
+        return response_json
     data_block = response_json.get("data")
     if isinstance(data_block, list):
         return data_block
@@ -175,6 +179,15 @@ def extract_image_entries(response_json):
 
 
 def extract_task_id(response_json):
+    if isinstance(response_json, list):
+        for item in response_json:
+            if isinstance(item, dict):
+                match = extract_task_id(item)
+                if match:
+                    return match
+        return None
+    if not isinstance(response_json, dict):
+        return None
     if "task_id" in response_json:
         return response_json["task_id"]
     data_block = response_json.get("data")
@@ -305,6 +318,7 @@ class CYGeminiRelay:
     DISPLAY_NAME = "Banana Pro"
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
     RETURN_NAMES = ("输出1", "输出2", "输出3", "输出4", "输出5")
+    IMAGE_OUTPUT_COUNT = 5
     FUNCTION = "run"
     CATEGORY = CATEGORY
 
@@ -353,7 +367,7 @@ class CYGeminiRelay:
                 },
             )
 
-        for idx in range(len(cls.RETURN_TYPES)):
+        for idx in range(cls.IMAGE_OUTPUT_COUNT):
             optional_inputs[f"刷新输出{idx + 1}"] = (
                 "BOOLEAN",
                 {"default": False, "label": f"刷新输出{idx + 1}", "display": "button", "label_on": "刷新", "label_off": "刷新"},
@@ -373,9 +387,18 @@ class CYGeminiRelay:
                     "BOOLEAN",
                     {"default": False, "label": "匹配参考尺寸", "label_on": "开启", "label_off": "关闭"},
                 ),
-                "按行拆分提示词": (
+                "⚡️按行拆分提示词": (
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
+                ),
+                "跳过未刷新保存": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label": "跳过未刷新保存",
+                        "label_on": "开启",
+                        "label_off": "关闭",
+                    },
                 ),
                 "刷新": (
                     "BOOLEAN",
@@ -404,6 +427,7 @@ class CYGeminiRelay:
         prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
         refresh_mode = bool(self._get_input_value(inputs, "刷新", "refresh_mode", default=False))
+        skip_unsaved = bool(self._get_input_value(inputs, "跳过未刷新保存", "skip_unsaved", default=True))
 
         if not refresh_mode:
             self._reset_cached_outputs()
@@ -469,7 +493,7 @@ class CYGeminiRelay:
             dispatch_prompts = [prompt_list[0]]
 
         provided_images = []
-        primary_image_indices = [None] * 5
+        primary_image_indices = [None] * self.IMAGE_OUTPUT_COUNT
         global_image_indices = []
         for idx, name in enumerate(self.IMAGE_INPUT_NAMES):
             value = self._get_input_value(
@@ -480,7 +504,7 @@ class CYGeminiRelay:
             if value is not None:
                 provided_images.append(value)
                 image_idx = len(provided_images) - 1
-                if idx < 5:
+                if idx < self.IMAGE_OUTPUT_COUNT:
                     primary_image_indices[idx] = image_idx
                 else:
                     global_image_indices.append(image_idx)
@@ -505,6 +529,8 @@ class CYGeminiRelay:
         exec_image_groups = image_groups
         output_positions = None
 
+        skip_save_mask = [False] * self.IMAGE_OUTPUT_COUNT
+
         if refresh_mode:
             refresh_indices = self._collect_refresh_requests(inputs)
             refresh_indices = [idx for idx in refresh_indices if idx < len(dispatch_prompts)]
@@ -522,9 +548,13 @@ class CYGeminiRelay:
                 else:
                     exec_image_groups = image_groups
                 output_positions = refresh_indices
+                if skip_unsaved:
+                    for idx in range(self.IMAGE_OUTPUT_COUNT):
+                        if idx not in refresh_indices:
+                            skip_save_mask[idx] = True
 
         if not refresh_mode:
-            output_positions = list(range(len(self.RETURN_TYPES)))
+            output_positions = list(range(self.IMAGE_OUTPUT_COUNT))
 
         if provided_images:
             if not exec_configs:
@@ -549,7 +579,9 @@ class CYGeminiRelay:
                 image_groups=exec_image_groups,
                 output_positions=output_positions,
             )
-            return self._ensure_port_tuple(edit_result, updated_ports=updated_ports, use_cache_fallback=refresh_mode)
+            return self._ensure_port_tuple(
+                edit_result, updated_ports=updated_ports, use_cache_fallback=not refresh_mode, skip_mask=skip_save_mask
+            )
 
         updated_ports = output_positions if output_positions else [0]
 
@@ -563,7 +595,9 @@ class CYGeminiRelay:
             1,
             configs_to_use,
         )
-        return self._ensure_port_tuple(generation_result, updated_ports=updated_ports, use_cache_fallback=refresh_mode)
+        return self._ensure_port_tuple(
+            generation_result, updated_ports=updated_ports, use_cache_fallback=not refresh_mode, skip_mask=skip_save_mask
+        )
 
     def _assert_allowed_relay(self):
         """Ensure all API endpoints still point to the official relay."""
@@ -683,7 +717,11 @@ class CYGeminiRelay:
             extras_payload = [{"image_indexes": group} for group in image_groups]
 
         dispatch_result = self._dispatch_requests(
-            single_call, channel_configs, prompts, extras=extras_payload, merge=not multi_output_mode
+            single_call,
+            channel_configs,
+            prompts,
+            extras=extras_payload,
+            merge=not multi_output_mode,
         )
 
         if multi_output_mode:
@@ -720,6 +758,7 @@ class CYGeminiRelay:
                 {
                     "key": key_value.strip(),
                     "aspect": CYGeminiRelay._normalize_aspect_override(aspect_selection),
+                    "label": label,
                 }
             )
 
@@ -730,7 +769,7 @@ class CYGeminiRelay:
 
     def _collect_refresh_requests(self, inputs: dict):
         indices = []
-        for idx in range(len(self.RETURN_TYPES)):
+        for idx in range(self.IMAGE_OUTPUT_COUNT):
             flag = self._get_input_value(inputs, f"刷新输出{idx + 1}", default=False)
             if bool(flag):
                 indices.append(idx)
@@ -769,7 +808,7 @@ class CYGeminiRelay:
             raise ValueError("提示词数量与 Key 数量不匹配。")
 
         if extras is not None and len(extras) != len(prompts):
-            raise ValueError("Prompt and metadata counts do not match for dispatch.")
+            raise ValueError("Prompt and extras counts do not match for dispatch.")
 
         tasks = []
         for idx, (config, prompt) in enumerate(zip(channel_configs, prompts)):
@@ -777,6 +816,7 @@ class CYGeminiRelay:
             tasks.append((config, prompt, extra))
 
         results = [None] * len(tasks)
+
         failures = []
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
             futures = {
@@ -851,29 +891,44 @@ class CYGeminiRelay:
                 return source[name]
         return default
 
-    def _ensure_port_tuple(self, result, updated_ports=None, use_cache_fallback=True):
+    def _ensure_port_tuple(self, result, updated_ports=None, use_cache_fallback=True, skip_mask=None):
         if not hasattr(self, "_cached_outputs"):
             self._cached_outputs = [None] * len(self.RETURN_TYPES)
 
-        refreshed = set(updated_ports or [])
-        if len(result) == len(self.RETURN_TYPES):
-            outputs = list(result)
-        else:
-            outputs = [None] * len(self.RETURN_TYPES)
-            if result and isinstance(result, tuple) and result[0] is not None:
-                outputs[0] = result[0]
+        skip_flags = skip_mask or [False] * len(self.RETURN_TYPES)
 
-        final_outputs = []
-        for idx, value in enumerate(outputs):
+        outputs = list(self._cached_outputs)
+        refreshed_order = list(updated_ports or [])
+        refreshed_set = set(refreshed_order)
+
+        def assign_value(port_index: int, value):
             if value is not None:
-                self._cached_outputs[idx] = value
-                final_outputs.append(value)
-            else:
-                if use_cache_fallback or idx not in refreshed:
-                    final_outputs.append(self._cached_outputs[idx])
-                else:
-                    final_outputs.append(None)
-        return tuple(final_outputs)
+                outputs[port_index] = value
+            elif not use_cache_fallback and port_index in refreshed_set:
+                outputs[port_index] = None
+            # else keep cached value
+
+        if isinstance(result, tuple) and len(result) == len(self.RETURN_TYPES):
+            for idx, value in enumerate(result):
+                assign_value(idx, value)
+        elif isinstance(result, (tuple, list)):
+            seq = list(result)
+            if refreshed_order:
+                for seq_idx, port_idx in enumerate(refreshed_order):
+                    if seq_idx >= len(seq):
+                        break
+                    assign_value(port_idx, seq[seq_idx])
+            elif seq:
+                assign_value(0, seq[0])
+        elif result is not None:
+            assign_value(0, result)
+
+        for idx, skip in enumerate(skip_flags):
+            if skip:
+                outputs[idx] = None
+
+        self._cached_outputs = outputs
+        return tuple(outputs)
 
     def _reset_cached_outputs(self):
         self._cached_outputs = [None] * len(self.RETURN_TYPES)
