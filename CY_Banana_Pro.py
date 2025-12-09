@@ -319,6 +319,7 @@ class CYGeminiRelay:
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE")
     RETURN_NAMES = ("输出1", "输出2", "输出3", "输出4", "输出5")
     IMAGE_OUTPUT_COUNT = 5
+    MAX_CONCURRENCY = min(5, IMAGE_OUTPUT_COUNT)
     FUNCTION = "run"
     CATEGORY = CATEGORY
 
@@ -383,11 +384,22 @@ class CYGeminiRelay:
                 "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
                 "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
                 "图像尺寸": (cls.IMAGE_SIZE_OPTIONS, {"default": cls.IMAGE_SIZE_OPTIONS[0], "label": "图像尺寸"}),
+                "并发通道": (
+                    "INT",
+                    {
+                        "default": 1,
+                        "label": "并发通道",
+                        "tooltip": "仅文生图可用，1=关闭，2-5=开启",
+                        "min": 1,
+                        "max": min(5, len(cls.RETURN_TYPES)),
+                        "step": 1,
+                    },
+                ),
                 "匹配参考尺寸": (
                     "BOOLEAN",
                     {"default": False, "label": "匹配参考尺寸", "label_on": "开启", "label_off": "关闭"},
                 ),
-                "⚡️按行拆分提示词": (
+                "按行拆分提示词": (
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
                 ),
@@ -426,8 +438,17 @@ class CYGeminiRelay:
 
         prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
+        concurrency_raw = self._get_input_value(inputs, "并发通道", "concurrency_channels", default=1)
+        try:
+            concurrency_value = int(concurrency_raw)
+        except (TypeError, ValueError):
+            concurrency_value = 1
+        concurrency_value = max(1, min(self.MAX_CONCURRENCY, concurrency_value))
         refresh_mode = bool(self._get_input_value(inputs, "刷新", "refresh_mode", default=False))
         skip_unsaved = bool(self._get_input_value(inputs, "跳过未刷新保存", "skip_unsaved", default=True))
+
+        if concurrency_value > 1 and split_mode:
+            raise ValueError("并发通道与按行拆分提示词不可同时开启。")
 
         if not refresh_mode:
             self._reset_cached_outputs()
@@ -480,6 +501,9 @@ class CYGeminiRelay:
         if not channel_configs:
             raise ValueError("Key1 是必填项。")
 
+        multi_output_generation = False
+        concurrency_count = 1
+
         if split_mode:
             needed_channels = len(prompt_list)
             if needed_channels > len(channel_configs):
@@ -488,9 +512,16 @@ class CYGeminiRelay:
                 )
             configs_to_use = channel_configs[:needed_channels]
             dispatch_prompts = prompt_list
+            concurrency_count = needed_channels
         else:
-            configs_to_use = [channel_configs[0]]
-            dispatch_prompts = [prompt_list[0]]
+            concurrency_count = concurrency_value
+            if concurrency_count > len(channel_configs):
+                raise ValueError(
+                    f"并发通道设置为 {concurrency_count}，但仅提供了 {len(channel_configs)} 个 Key。"
+                )
+            configs_to_use = channel_configs[:concurrency_count]
+            dispatch_prompts = [prompt_list[0]] * concurrency_count
+            multi_output_generation = concurrency_count > 1
 
         provided_images = []
         primary_image_indices = [None] * self.IMAGE_OUTPUT_COUNT
@@ -508,6 +539,9 @@ class CYGeminiRelay:
                     primary_image_indices[idx] = image_idx
                 else:
                     global_image_indices.append(image_idx)
+
+        if provided_images and multi_output_generation:
+            raise ValueError("并发通道仅支持文生图，请关闭并发或移除参考图。")
 
         image_groups = None
         if provided_images and split_mode:
@@ -530,6 +564,9 @@ class CYGeminiRelay:
         output_positions = None
 
         skip_save_mask = [False] * self.IMAGE_OUTPUT_COUNT
+        default_output_positions = list(range(self.IMAGE_OUTPUT_COUNT))
+        if multi_output_generation:
+            default_output_positions = list(range(len(dispatch_prompts)))
 
         if refresh_mode:
             refresh_indices = self._collect_refresh_requests(inputs)
@@ -554,7 +591,7 @@ class CYGeminiRelay:
                             skip_save_mask[idx] = True
 
         if not refresh_mode:
-            output_positions = list(range(self.IMAGE_OUTPUT_COUNT))
+            output_positions = default_output_positions
 
         if provided_images:
             if not exec_configs:
@@ -594,6 +631,7 @@ class CYGeminiRelay:
             resolved_size,
             1,
             configs_to_use,
+            multi_output=multi_output_generation,
         )
         return self._ensure_port_tuple(
             generation_result, updated_ports=updated_ports, use_cache_fallback=not refresh_mode, skip_mask=skip_save_mask
@@ -620,6 +658,7 @@ class CYGeminiRelay:
         resolved_size: Optional[str],
         count: int,
         channel_configs: List[dict],
+        multi_output: bool = False,
     ):
         def single_call(channel_config: dict, prompt_value: str, extra: Optional[dict] = None):
             current_key = channel_config["key"]
@@ -642,7 +681,7 @@ class CYGeminiRelay:
             res_json = ensure_image_payload(res.json(), current_key)
             return download_process(res_json)
 
-        return self._dispatch_requests(single_call, channel_configs, prompts)
+        return self._dispatch_requests(single_call, channel_configs, prompts, merge=not multi_output)
 
     def _run_edit(
         self,
@@ -901,7 +940,15 @@ class CYGeminiRelay:
         refreshed_order = list(updated_ports or [])
         refreshed_set = set(refreshed_order)
 
+        def normalize_value(value):
+            if isinstance(value, (tuple, list)) and len(value) == 1:
+                inner = value[0]
+                if isinstance(inner, torch.Tensor):
+                    return inner
+            return value
+
         def assign_value(port_index: int, value):
+            value = normalize_value(value)
             if value is not None:
                 outputs[port_index] = value
             elif not use_cache_fallback and port_index in refreshed_set:
