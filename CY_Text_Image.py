@@ -1,7 +1,10 @@
 import base64
 import configparser
 import io
+import json
+import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -15,9 +18,8 @@ from PIL import Image
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-RELAY_BASE_URL = "https://api.xheai.cc"
-API_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/generations"
-TASK_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/tasks"
+DEFAULT_RELAY_BASE_URL = "https://api.xheai.cc"
+GENERATION_ENDPOINT_PATH = "/v1/images/generations"
 REQUEST_TIMEOUT = 300
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
@@ -70,8 +72,10 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
-    "Nano-Banana-1": "Nano-Banana-1",
-    "Nano-Banana-Pro": "Nano-Banana-Pro",
+    "nano-banana": "nano-banana",
+    "nano-banana-2": "nano-banana-2",
+    "nano-banana-2-2k": "nano-banana-2-2k",
+    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -89,9 +93,8 @@ ASPECT_DISPLAY_MAP = {
 
 RESPONSE_DISPLAY_MAP = {
     "URL": "url",
-    "Base64": "b64_json",
 }
-DEFAULT_RESPONSE_OPTION = next(iter(RESPONSE_DISPLAY_MAP))
+DEFAULT_RESPONSE_OPTION = "URL"
 DEFAULT_RESPONSE_VALUE = RESPONSE_DISPLAY_MAP[DEFAULT_RESPONSE_OPTION]
 
 IMAGE_SIZE_DISPLAY_MAP = {
@@ -100,6 +103,22 @@ IMAGE_SIZE_DISPLAY_MAP = {
     "2K": "2K",
     "4K": "4K",
 }
+
+RELAY_FIELD_LABEL = "中转网址"
+RELAY_CONFIG_FIELD = "relay_url"
+
+
+def normalize_base_url(candidate: Optional[str]) -> str:
+    base = (candidate or "").strip()
+    if not base:
+        return DEFAULT_RELAY_BASE_URL.rstrip("/")
+    return base.rstrip("/").rstrip("\\")
+
+
+def build_endpoint(base_url: str, path: str) -> str:
+    base = normalize_base_url(base_url)
+    suffix = path if path.startswith("/") else f"/{path}"
+    return f"{base}{suffix}"
 
 
 def resolve_image_size(image_size: str, aspect_ratio: str):
@@ -130,24 +149,6 @@ def extract_image_entries(response_json):
     return None
 
 
-def extract_task_id(response_json):
-    if isinstance(response_json, list):
-        for item in response_json:
-            if isinstance(item, dict):
-                match = extract_task_id(item)
-                if match:
-                    return match
-        return None
-    if not isinstance(response_json, dict):
-        return None
-    if "task_id" in response_json:
-        return response_json["task_id"]
-    data_block = response_json.get("data")
-    if isinstance(data_block, dict) and "task_id" in data_block:
-        return data_block["task_id"]
-    return None
-
-
 def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT, backoff=2, **kwargs):
     kwargs.setdefault("verify", False)
     last_error = None
@@ -170,34 +171,6 @@ def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT,
     if last_error:
         raise last_error
     raise RuntimeError("Unknown request failure")
-
-
-def poll_task_result(task_id, api_key, retries=4, delay=5):
-    url = f"{TASK_ENDPOINT}/{task_id}"
-    headers = {"Authorization": f"Bearer {api_key}"}
-    last_response = None
-    for attempt in range(1, retries + 1):
-        res = make_request_with_retry("get", url, headers=headers, timeout=REQUEST_TIMEOUT)
-        last_response = res.json()
-        entries = extract_image_entries(last_response)
-        status = last_response.get("data", {}).get("status") or last_response.get("status")
-        if entries:
-            return last_response
-        if status and str(status).upper() == "FAILURE":
-            raise Exception(f"Task {task_id} failed: {last_response}")
-        if attempt < retries:
-            time.sleep(min(delay * attempt, 20))
-    return last_response
-
-
-def ensure_image_payload(response_json, api_key, max_polls=4):
-    entries = extract_image_entries(response_json)
-    if entries:
-        return response_json
-    task_id = extract_task_id(response_json)
-    if not task_id:
-        return response_json
-    return poll_task_result(task_id, api_key, retries=max_polls)
 
 
 def download_process(response_json):
@@ -266,8 +239,8 @@ def download_process(response_json):
 
 class CYTextToImage:
     DISPLAY_NAME = "CY文生图"
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("输出1",)
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("图像输出", "响应文本")
     IMAGE_OUTPUT_COUNT = 1
     MAX_CONCURRENCY = 5
     FUNCTION = "run"
@@ -286,6 +259,15 @@ class CYTextToImage:
         return {
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                RELAY_FIELD_LABEL: (
+                    "STRING",
+                    {
+                        "multiline": False,
+                        "label": RELAY_FIELD_LABEL,
+                        "default": CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL),
+                        "tooltip": "示例：https://api.xheai.cc",
+                    },
+                ),
                 "Key1": (
                     "STRING",
                     {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
@@ -308,9 +290,23 @@ class CYTextToImage:
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
                 ),
+                "seed": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 0xFFFFFFFFFFFFFFFF,
+                        "control_after_generate": "randomize",
+                        "tooltip": "随机种子，每次生成后自动随机",
+                    },
+                ),
             },
             "optional": {},
         }
+
+    @classmethod
+    def IS_CHANGED(cls, **inputs):
+        return inputs.get("seed", random.random())
 
     def run(self, **inputs):
         cfg_dirty = False
@@ -340,9 +336,21 @@ class CYTextToImage:
 
         self._reset_cached_outputs()
 
+        relay_default = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL)
+        relay_input = self._get_input_value(
+            inputs, RELAY_FIELD_LABEL, "relay_url", "relay_base_url", default=relay_default
+        )
+        relay_clean = normalize_base_url(relay_input or relay_default)
+        stored_relay = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, relay_default)
+        if normalize_base_url(stored_relay) != relay_clean:
+            CONFIG["DEFAULT"][RELAY_CONFIG_FIELD] = relay_clean
+            cfg_dirty = True
+
         api_key_clean = resolve_key("api_key", "Key1", "api_key")
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
+
+        response_value = DEFAULT_RESPONSE_VALUE
 
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
@@ -368,9 +376,9 @@ class CYTextToImage:
         if not channel_configs:
             raise ValueError("Key1 是必填项。")
 
-        default_output_positions = [0]
+        default_output_positions = [0, 1]
 
-        generation_result = self._run_generation(
+        generation_result, response_dump = self._run_generation(
             api_key_clean,
             model_value,
             dispatch_prompts,
@@ -379,10 +387,21 @@ class CYTextToImage:
             resolved_size,
             1,
             channel_configs,
+            relay_clean,
+            response_value,
         )
-        return self._ensure_port_tuple(
-            generation_result, updated_ports=default_output_positions, use_cache_fallback=False
-        )
+
+        image_output = None
+        if isinstance(generation_result, tuple):
+            if generation_result:
+                image_output = generation_result[0]
+        elif generation_result is not None:
+            image_output = generation_result
+
+        if image_output is None:
+            image_output = generation_result
+
+        return (image_output, response_dump)
 
     def _run_generation(
         self,
@@ -394,8 +413,14 @@ class CYTextToImage:
         resolved_size: Optional[str],
         count: int,
         channel_configs: List[dict],
+        relay_base_url: str,
+        response_format_value: str,
         multi_output: bool = False,
     ):
+        endpoint = build_endpoint(relay_base_url, GENERATION_ENDPOINT_PATH)
+        collected_responses = []
+        responses_lock = threading.Lock()
+
         def single_call(channel_config: dict, prompt_value: str, extra: Optional[dict] = None):
             current_key = channel_config["key"]
             aspect_for_call = channel_config.get("aspect") or aspect_value
@@ -403,7 +428,7 @@ class CYTextToImage:
                 "model": model_value,
                 "prompt": prompt_value,
                 "aspect_ratio": aspect_for_call,
-                "response_format": DEFAULT_RESPONSE_VALUE,
+                "response_format": response_format_value,
                 "n": count,
             }
 
@@ -413,11 +438,20 @@ class CYTextToImage:
                     payload["size"] = resolved_size
 
             headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
-            res = make_request_with_retry("post", API_ENDPOINT, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
-            res_json = ensure_image_payload(res.json(), current_key)
+            res = make_request_with_retry("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+            res_json = res.json()
+            try:
+                response_text = json.dumps(res_json, ensure_ascii=False, indent=2)
+            except Exception:  # noqa: BLE001
+                response_text = str(res_json)
+            with responses_lock:
+                collected_responses.append(response_text)
             return download_process(res_json)
 
-        return self._dispatch_requests(single_call, channel_configs, prompts, merge=True)
+        image_result = self._dispatch_requests(single_call, channel_configs, prompts, merge=True)
+        response_dump = "\n\n".join(collected_responses) if collected_responses else ""
+        print(f"[DEBUG] collected_responses count: {len(collected_responses)}, response_dump length: {len(response_dump)}")
+        return image_result, response_dump
 
     @staticmethod
     def _collect_channel_configs(primary_key: str, count: int):
@@ -464,21 +498,7 @@ class CYTextToImage:
                     failures.append({"idx": idx, "exc": exc})
                     print(f"[WARN] API request #{idx + 1} failed: {exc}")
 
-        if failures and len(failures) < len(tasks):
-            print(f"[INFO] Retrying {len(failures)} failed requests sequentially...")
-            retry_failures = []
-            for failure in failures:
-                idx = failure["idx"]
-                try:
-                    extra = tasks[idx][2]
-                    results[idx] = func(channel_configs[idx], prompts[idx], extra)
-                    print(f"[OK] Retry #{idx + 1} succeeded.")
-                except Exception as retry_exc:  # noqa: BLE001
-                    retry_failures.append({"idx": idx, "exc": retry_exc})
-                    print(f"[ERR] Retry #{idx + 1} failed again: {retry_exc}")
-            failures = retry_failures
-
-        if not any(results) and failures:
+        if failures:
             raise failures[0]["exc"]
 
         return self._merge_results(results) if merge else results
@@ -569,6 +589,7 @@ class CYTextToImage:
 
     def _has_cached_outputs(self):
         return any(entry is not None for entry in self._cached_outputs)
+
 
 
 NODE_CLASS_MAPPINGS = {"CYTextToImage": CYTextToImage}

@@ -15,9 +15,8 @@ from PIL import Image, ImageOps
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-RELAY_BASE_URL = "https://api.xheai.cc"
-EDIT_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/edits"
-TASK_ENDPOINT = f"{RELAY_BASE_URL}/v1/images/tasks"
+DEFAULT_RELAY_BASE_URL = "https://api.xheai.cc"
+EDIT_ENDPOINT_PATH = "/v1/images/edits"
 REQUEST_TIMEOUT = 300
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
@@ -70,8 +69,10 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
-    "Nano-Banana-1": "Nano-Banana-1",
-    "Nano-Banana-Pro": "Nano-Banana-Pro",
+    "nano-banana": "nano-banana",
+    "nano-banana-2": "nano-banana-2",
+    "nano-banana-2-2k": "nano-banana-2-2k",
+    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -91,8 +92,7 @@ RESPONSE_DISPLAY_MAP = {
     "URL": "url",
     "Base64": "b64_json",
 }
-DEFAULT_RESPONSE_OPTION = next(iter(RESPONSE_DISPLAY_MAP))
-DEFAULT_RESPONSE_VALUE = RESPONSE_DISPLAY_MAP[DEFAULT_RESPONSE_OPTION]
+DEFAULT_RESPONSE_OPTION = "URL"
 
 IMAGE_SIZE_DISPLAY_MAP = {
     "Auto": "Auto",
@@ -100,6 +100,22 @@ IMAGE_SIZE_DISPLAY_MAP = {
     "2K": "2K",
     "4K": "4K",
 }
+
+RELAY_FIELD_LABEL = "中转网址"
+RELAY_CONFIG_FIELD = "relay_url"
+
+
+def normalize_base_url(candidate: Optional[str]) -> str:
+    base = (candidate or "").strip()
+    if not base:
+        return DEFAULT_RELAY_BASE_URL.rstrip("/")
+    return base.rstrip("/").rstrip("\\")
+
+
+def build_endpoint(base_url: str, path: str) -> str:
+    base = normalize_base_url(base_url)
+    suffix = path if path.startswith("/") else f"/{path}"
+    return f"{base}{suffix}"
 
 
 def smart_resize(image, target_width, target_height):
@@ -147,24 +163,6 @@ def extract_image_entries(response_json):
     return None
 
 
-def extract_task_id(response_json):
-    if isinstance(response_json, list):
-        for item in response_json:
-            if isinstance(item, dict):
-                match = extract_task_id(item)
-                if match:
-                    return match
-        return None
-    if not isinstance(response_json, dict):
-        return None
-    if "task_id" in response_json:
-        return response_json["task_id"]
-    data_block = response_json.get("data")
-    if isinstance(data_block, dict) and "task_id" in data_block:
-        return data_block["task_id"]
-    return None
-
-
 def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT, backoff=2, **kwargs):
     kwargs.setdefault("verify", False)
     last_error = None
@@ -187,34 +185,6 @@ def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT,
     if last_error:
         raise last_error
     raise RuntimeError("Unknown request failure")
-
-
-def poll_task_result(task_id, api_key, retries=4, delay=5):
-    url = f"{TASK_ENDPOINT}/{task_id}"
-    headers = {"Authorization": f"Bearer {api_key}"}
-    last_response = None
-    for attempt in range(1, retries + 1):
-        res = make_request_with_retry("get", url, headers=headers, timeout=REQUEST_TIMEOUT)
-        last_response = res.json()
-        entries = extract_image_entries(last_response)
-        status = last_response.get("data", {}).get("status") or last_response.get("status")
-        if entries:
-            return last_response
-        if status and str(status).upper() == "FAILURE":
-            raise Exception(f"Task {task_id} failed: {last_response}")
-        if attempt < retries:
-            time.sleep(min(delay * attempt, 20))
-    return last_response
-
-
-def ensure_image_payload(response_json, api_key, max_polls=4):
-    entries = extract_image_entries(response_json)
-    if entries:
-        return response_json
-    task_id = extract_task_id(response_json)
-    if not task_id:
-        return response_json
-    return poll_task_result(task_id, api_key, retries=max_polls)
 
 
 def download_process(response_json, target_w=None, target_h=None, strict_mode=False):
@@ -297,6 +267,7 @@ class CYImageEdit:
     IMAGE_SIZE_OPTIONS = [size for size in IMAGE_SIZE_DISPLAY_MAP.keys() if size != "Auto"]
     IMAGE_INPUT_NAMES = [f"输入{i}" for i in range(1, 9)]
     IMAGE_LEGACY_NAMES = [f"image_{i}" for i in range(1, 9)]
+    RESPONSE_OPTIONS = list(RESPONSE_DISPLAY_MAP.keys())
 
     def __init__(self):
         self._cached_outputs = [None] * len(self.RETURN_TYPES)
@@ -319,9 +290,22 @@ class CYImageEdit:
         return {
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                RELAY_FIELD_LABEL: (
+                    "STRING",
+                    {
+                        "multiline": False,
+                        "label": RELAY_FIELD_LABEL,
+                        "default": CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL),
+                        "tooltip": "示例：https://api.xheai.cc",
+                    },
+                ),
                 "Key1": (
                     "STRING",
                     {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
+                ),
+                "响应格式": (
+                    cls.RESPONSE_OPTIONS,
+                    {"default": DEFAULT_RESPONSE_OPTION, "label": "响应格式"},
                 ),
                 "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
                 "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
@@ -364,9 +348,24 @@ class CYImageEdit:
         if not refresh_mode:
             self._reset_cached_outputs()
 
+        relay_default = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL)
+        relay_input = self._get_input_value(
+            inputs, RELAY_FIELD_LABEL, "relay_url", "relay_base_url", default=relay_default
+        )
+        relay_clean = normalize_base_url(relay_input or relay_default)
+        stored_relay = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, relay_default)
+        if normalize_base_url(stored_relay) != relay_clean:
+            CONFIG["DEFAULT"][RELAY_CONFIG_FIELD] = relay_clean
+            cfg_dirty = True
+
         api_key_clean = resolve_key("api_key", "Key1", "api_key")
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
+
+        response_option = self._get_input_value(
+            inputs, "响应格式", "response_format", default=DEFAULT_RESPONSE_OPTION
+        )
+        response_value = resolve_display_value(response_option, RESPONSE_DISPLAY_MAP, "response format")
 
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
@@ -479,6 +478,8 @@ class CYImageEdit:
             provided_images,
             match_reference_size,
             exec_configs,
+            relay_clean,
+            response_value,
             image_groups=exec_image_groups,
             output_positions=output_positions,
         )
@@ -496,12 +497,16 @@ class CYImageEdit:
         images: List[torch.Tensor],
         match_reference_size: bool,
         channel_configs: List[dict],
+        relay_base_url: str,
+        response_format_value: str,
         image_groups: Optional[List[List[int]]] = None,
         output_positions: Optional[List[int]] = None,
     ):
         base_files = self._collect_files(images)
         if not base_files:
             raise ValueError("At least one image is required for editing.")
+
+        endpoint = build_endpoint(relay_base_url, EDIT_ENDPOINT_PATH)
 
         def clone_files(entries):
             return [(field, (meta[0], meta[1], meta[2])) for field, meta in entries]
@@ -525,7 +530,7 @@ class CYImageEdit:
                 "model": model_value,
                 "prompt": prompt_value,
                 "aspect_ratio": aspect_for_call,
-                "response_format": DEFAULT_RESPONSE_VALUE,
+                "response_format": response_format_value,
             }
 
             if image_size_value != "Auto":
@@ -534,13 +539,13 @@ class CYImageEdit:
             headers = {"Authorization": f"Bearer {current_key}"}
             res = make_request_with_retry(
                 "post",
-                EDIT_ENDPOINT,
+                endpoint,
                 headers=headers,
                 data=payload,
                 files=clone_files(selected_entries),
                 timeout=REQUEST_TIMEOUT,
             )
-            res_json = ensure_image_payload(res.json(), current_key)
+            res_json = res.json()
 
             target_w = target_h = None
             strict_mode = False
@@ -650,21 +655,7 @@ class CYImageEdit:
                     failures.append({"idx": idx, "exc": exc})
                     print(f"[WARN] API request #{idx + 1} failed: {exc}")
 
-        if failures and len(failures) < len(tasks):
-            print(f"[INFO] Retrying {len(failures)} failed requests sequentially...")
-            retry_failures = []
-            for failure in failures:
-                idx = failure["idx"]
-                try:
-                    extra = tasks[idx][2]
-                    results[idx] = func(channel_configs[idx], prompts[idx], extra)
-                    print(f"[OK] Retry #{idx + 1} succeeded.")
-                except Exception as retry_exc:  # noqa: BLE001
-                    retry_failures.append({"idx": idx, "exc": retry_exc})
-                    print(f"[ERR] Retry #{idx + 1} failed again: {retry_exc}")
-            failures = retry_failures
-
-        if not any(results) and failures:
+        if failures:
             raise failures[0]["exc"]
 
         return self._merge_results(results) if merge else results
