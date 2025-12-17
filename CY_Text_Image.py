@@ -20,7 +20,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DEFAULT_RELAY_BASE_URL = "https://api.xheai.cc"
 GENERATION_ENDPOINT_PATH = "/v1/images/generations"
-REQUEST_TIMEOUT = 300
+CHAT_ENDPOINT_PATH = "/v1/chat/completions"
+REQUEST_TIMEOUT = 600  # 10分钟，等待生图返回
+
+# 需要走 chat/completions 接口的模型
+CHAT_API_MODELS = {"gemini-3-pro-image-preview-4k"}
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
@@ -76,6 +80,7 @@ DEFAULT_MODEL_MAP = {
     "nano-banana-2": "nano-banana-2",
     "nano-banana-2-2k": "nano-banana-2-2k",
     "nano-banana-2-4k": "nano-banana-2-4k",
+    "「CS」gemini-3-pro-image-preview-4k": "gemini-3-pro-image-preview-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -90,12 +95,6 @@ ASPECT_DISPLAY_MAP = {
     "5:4": "5:4",
     "21:9": "21:9",
 }
-
-RESPONSE_DISPLAY_MAP = {
-    "URL": "url",
-}
-DEFAULT_RESPONSE_OPTION = "URL"
-DEFAULT_RESPONSE_VALUE = RESPONSE_DISPLAY_MAP[DEFAULT_RESPONSE_OPTION]
 
 IMAGE_SIZE_DISPLAY_MAP = {
     "Auto": "Auto",
@@ -149,28 +148,29 @@ def extract_image_entries(response_json):
     return None
 
 
-def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT, backoff=2, **kwargs):
+def make_request(method, url, timeout=REQUEST_TIMEOUT, **kwargs):
+    """发送请求，不重试"""
     kwargs.setdefault("verify", False)
+    response = requests.request(method, url, timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response
+
+
+def download_image_with_retry(url, max_retries=3, timeout=120):
+    """下载图片，带重试机制"""
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
-            response = requests.request(method, url, timeout=timeout, **kwargs)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.HTTPError as exc:
+            res = requests.get(url, timeout=timeout, verify=False)
+            if res.status_code == 200:
+                return Image.open(io.BytesIO(res.content)).convert("RGB")
+            last_error = Exception(f"HTTP {res.status_code}")
+        except Exception as exc:
             last_error = exc
-            if 400 <= exc.response.status_code < 500:
-                raise
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-            last_error = exc
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
+            print(f"[WARN] 图片下载失败 (尝试 {attempt}/{max_retries}): {exc}")
         if attempt < max_retries:
-            sleep_time = min(backoff**attempt, 20)
-            time.sleep(sleep_time)
-    if last_error:
-        raise last_error
-    raise RuntimeError("Unknown request failure")
+            time.sleep(2 ** attempt)
+    raise last_error or Exception("图片下载失败")
 
 
 def download_process(response_json):
@@ -187,15 +187,14 @@ def download_process(response_json):
                 try:
                     img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
                     image_objects.append(img)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] Base64 图片解码失败: {e}")
             elif "url" in item:
                 try:
-                    res = requests.get(item["url"], timeout=60, verify=False)
-                    if res.status_code == 200:
-                        image_objects.append(Image.open(io.BytesIO(res.content)).convert("RGB"))
-                except Exception:
-                    pass
+                    img = download_image_with_retry(item["url"])
+                    image_objects.append(img)
+                except Exception as e:
+                    print(f"[WARN] 图片下载最终失败: {e}")
     elif "choices" in response_json:
         content = response_json["choices"][0]["message"]["content"]
 
@@ -204,18 +203,17 @@ def download_process(response_json):
             try:
                 img = Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
                 image_objects.append(img)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] Base64 图片解码失败: {e}")
 
         if not image_objects:
             urls = re.findall(r"(https?://[^\s)\]\"']+)", content)
             for url in urls:
                 try:
-                    res = requests.get(url, timeout=60, verify=False)
-                    if res.status_code == 200:
-                        image_objects.append(Image.open(io.BytesIO(res.content)).convert("RGB"))
-                except Exception:
-                    pass
+                    img = download_image_with_retry(url)
+                    image_objects.append(img)
+                except Exception as e:
+                    print(f"[WARN] 图片下载最终失败: {e}")
     else:
         raise Exception("No images were returned by the API.")
 
@@ -239,8 +237,8 @@ def download_process(response_json):
 
 class CYTextToImage:
     DISPLAY_NAME = "CY文生图"
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("图像输出", "响应文本")
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("图像输出",)
     IMAGE_OUTPUT_COUNT = 1
     MAX_CONCURRENCY = 5
     FUNCTION = "run"
@@ -350,8 +348,6 @@ class CYTextToImage:
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
 
-        response_value = DEFAULT_RESPONSE_VALUE
-
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
         image_size = self._get_input_value(inputs, "图像尺寸", "image_size", default=self.IMAGE_SIZE_OPTIONS[0])
@@ -376,9 +372,7 @@ class CYTextToImage:
         if not channel_configs:
             raise ValueError("Key1 是必填项。")
 
-        default_output_positions = [0, 1]
-
-        generation_result, response_dump = self._run_generation(
+        generation_result = self._run_generation(
             api_key_clean,
             model_value,
             dispatch_prompts,
@@ -388,7 +382,6 @@ class CYTextToImage:
             1,
             channel_configs,
             relay_clean,
-            response_value,
         )
 
         image_output = None
@@ -401,7 +394,7 @@ class CYTextToImage:
         if image_output is None:
             image_output = generation_result
 
-        return (image_output, response_dump)
+        return (image_output,)
 
     def _run_generation(
         self,
@@ -414,44 +407,50 @@ class CYTextToImage:
         count: int,
         channel_configs: List[dict],
         relay_base_url: str,
-        response_format_value: str,
-        multi_output: bool = False,
     ):
-        endpoint = build_endpoint(relay_base_url, GENERATION_ENDPOINT_PATH)
-        collected_responses = []
-        responses_lock = threading.Lock()
+        # 根据模型选择接口
+        use_chat_api = model_value in CHAT_API_MODELS
+        if use_chat_api:
+            endpoint = build_endpoint(relay_base_url, CHAT_ENDPOINT_PATH)
+        else:
+            endpoint = build_endpoint(relay_base_url, GENERATION_ENDPOINT_PATH)
 
         def single_call(channel_config: dict, prompt_value: str, extra: Optional[dict] = None):
             current_key = channel_config["key"]
             aspect_for_call = channel_config.get("aspect") or aspect_value
-            payload = {
-                "model": model_value,
-                "prompt": prompt_value,
-                "aspect_ratio": aspect_for_call,
-                "response_format": response_format_value,
-                "n": count,
-            }
-
-            if image_size_value != "Auto":
-                payload["image_size"] = image_size_value
-                if resolved_size:
-                    payload["size"] = resolved_size
-
             headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
-            res = make_request_with_retry("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+
+            if use_chat_api:
+                # Chat completions 接口格式
+                payload = {
+                    "model": model_value,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt_value,
+                        }
+                    ],
+                }
+            else:
+                # Images generations 接口格式
+                payload = {
+                    "model": model_value,
+                    "prompt": prompt_value,
+                    "aspect_ratio": aspect_for_call,
+                    "response_format": "url",
+                    "n": count,
+                }
+                if image_size_value != "Auto":
+                    payload["image_size"] = image_size_value
+                    if resolved_size:
+                        payload["size"] = resolved_size
+
+            res = make_request("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
             res_json = res.json()
-            try:
-                response_text = json.dumps(res_json, ensure_ascii=False, indent=2)
-            except Exception:  # noqa: BLE001
-                response_text = str(res_json)
-            with responses_lock:
-                collected_responses.append(response_text)
             return download_process(res_json)
 
         image_result = self._dispatch_requests(single_call, channel_configs, prompts, merge=True)
-        response_dump = "\n\n".join(collected_responses) if collected_responses else ""
-        print(f"[DEBUG] collected_responses count: {len(collected_responses)}, response_dump length: {len(response_dump)}")
-        return image_result, response_dump
+        return image_result
 
     @staticmethod
     def _collect_channel_configs(primary_key: str, count: int):
