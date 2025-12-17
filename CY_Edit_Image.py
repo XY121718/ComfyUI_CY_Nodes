@@ -273,15 +273,11 @@ class CYImageEdit:
                 {"forceInput": idx != 0, "label": name},
             )
 
-        for idx in range(cls.IMAGE_OUTPUT_COUNT):
-            optional_inputs[f"刷新输出{idx + 1}"] = (
-                "BOOLEAN",
-                {"default": False, "label": f"刷新输出{idx + 1}", "display": "button", "label_on": "刷新", "label_off": "刷新"},
-            )
+
 
         return {
             "required": {
-                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 15}),
+                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 8}),
                 RELAY_FIELD_LABEL: (
                     "STRING",
                     {
@@ -306,9 +302,15 @@ class CYImageEdit:
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
                 ),
-                "刷新": (
-                    "BOOLEAN",
-                    {"default": False, "label": "刷新", "label_on": "开启", "label_off": "关闭"},
+                "种子": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 0xFFFFFFFFFFFFFFFF,
+                        "control_after_generate": "randomize",
+                        "tooltip": "随机种子，每次生成后自动随机",
+                    },
                 ),
             },
             "optional": optional_inputs,
@@ -330,11 +332,8 @@ class CYImageEdit:
 
         prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
-        refresh_mode = bool(self._get_input_value(inputs, "刷新", "refresh_mode", default=False))
-        skip_unsaved = True
 
-        if not refresh_mode:
-            self._reset_cached_outputs()
+        self._reset_cached_outputs()
 
         relay_default = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL)
         relay_input = self._get_input_value(
@@ -410,40 +409,18 @@ class CYImageEdit:
         exec_configs = channel_configs
         exec_prompts = dispatch_prompts
         exec_image_groups = image_groups
-        output_positions = None
 
         skip_save_mask = [False] * self.IMAGE_OUTPUT_COUNT
-        default_output_positions = list(range(self.IMAGE_OUTPUT_COUNT))
+        output_positions = list(range(self.IMAGE_OUTPUT_COUNT))
         if split_mode:
-            default_output_positions = list(range(len(dispatch_prompts)))
+            output_positions = list(range(len(dispatch_prompts)))
 
-        if refresh_mode:
-            refresh_indices = self._collect_refresh_requests(inputs)
-            refresh_indices = [idx for idx in refresh_indices if idx < len(dispatch_prompts)]
-            has_cache = self._has_cached_outputs()
-            if not refresh_indices:
-                if has_cache:
-                    return tuple(self._cached_outputs)
-                self._reset_cached_outputs()
-                refresh_mode = False
-            else:
-                exec_configs = [channel_configs[idx] for idx in refresh_indices]
-                exec_prompts = [dispatch_prompts[idx] for idx in refresh_indices]
-                if image_groups:
-                    exec_image_groups = [image_groups[idx] for idx in refresh_indices]
-                else:
-                    exec_image_groups = image_groups
-                output_positions = refresh_indices
-                if skip_unsaved:
-                    for idx in range(self.IMAGE_OUTPUT_COUNT):
-                        if idx not in refresh_indices:
-                            skip_save_mask[idx] = True
-
-        if not refresh_mode:
-            output_positions = default_output_positions
-
-        if not exec_configs:
-            raise ValueError("没有需要刷新的输出，至少选择一个有效端口。")
+        if output_positions:
+            updated_ports = output_positions
+        elif exec_image_groups:
+            updated_ports = list(range(len(exec_image_groups)))
+        else:
+            updated_ports = [0]
 
         if output_positions:
             updated_ports = output_positions
@@ -466,7 +443,7 @@ class CYImageEdit:
             output_positions=output_positions,
         )
         return self._ensure_port_tuple(
-            edit_result, updated_ports=updated_ports, use_cache_fallback=not refresh_mode, skip_mask=skip_save_mask
+            edit_result, updated_ports=updated_ports, use_cache_fallback=True, skip_mask=skip_save_mask
         )
 
     def _run_edit(
@@ -579,14 +556,6 @@ class CYImageEdit:
             return []
         count = max(1, int(count or 1))
         return [{"key": key_value, "aspect": None} for _ in range(count)]
-
-    def _collect_refresh_requests(self, inputs: dict):
-        indices = []
-        for idx in range(self.IMAGE_OUTPUT_COUNT):
-            flag = self._get_input_value(inputs, f"刷新输出{idx + 1}", default=False)
-            if bool(flag):
-                indices.append(idx)
-        return indices
 
     @staticmethod
     def _split_prompts(prompt: str, max_segments: int = 5):

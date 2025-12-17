@@ -256,7 +256,7 @@ class CYTextToImage:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 15}),
+                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 8}),
                 RELAY_FIELD_LABEL: (
                     "STRING",
                     {
@@ -288,7 +288,7 @@ class CYTextToImage:
                     "BOOLEAN",
                     {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
                 ),
-                "seed": (
+                "种子": (
                     "INT",
                     {
                         "default": 0,
@@ -304,7 +304,7 @@ class CYTextToImage:
 
     @classmethod
     def IS_CHANGED(cls, **inputs):
-        return inputs.get("seed", random.random())
+        return inputs.get("种子", random.random())
 
     def run(self, **inputs):
         cfg_dirty = False

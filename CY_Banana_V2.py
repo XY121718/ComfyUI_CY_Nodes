@@ -27,8 +27,8 @@ else:
     with CONFIG_PATH.open("w", encoding="utf-8") as fp:
         CONFIG.write(fp)
 
-ASPECT_OPTIONS = ["Auto", "1:1", "9:16", "16:9", "21:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4"]
-IMAGE_SIZE_OPTIONS = ["Auto", "1K", "2K", "4K"]
+ASPECT_OPTIONS = ["4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "1:1", "4:5", "5:4", "21:9"]
+IMAGE_SIZE_OPTIONS = ["1K", "2K", "4K"]
 
 
 class CYBananaV2:
@@ -37,8 +37,8 @@ class CYBananaV2:
     """
 
     DISPLAY_NAME = "CY_Banana_V2 ⚡"
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("图像输出", "文本输出")
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("图像输出",)
     FUNCTION = "generate_images"
     OUTPUT_NODE = True
     CATEGORY = CATEGORY
@@ -54,6 +54,7 @@ class CYBananaV2:
                     "default": DEFAULT_PROMPT,
                     "label": "提示词",
                     "dynamicPrompts": False,
+                    "rows": 8,
                 }),
                 "中转网址": ("STRING", {
                     "default": DEFAULT_RELAY_BASE_URL,
@@ -75,20 +76,21 @@ class CYBananaV2:
                     "tooltip": "1=单通道，2-3=多通道并发",
                 }),
                 "默认宽高比": (ASPECT_OPTIONS, {
-                    "default": "Auto",
+                    "default": "4:3",
                     "label": "默认宽高比",
                 }),
                 "图像尺寸": (IMAGE_SIZE_OPTIONS, {
-                    "default": "Auto",
+                    "default": "1K",
                     "label": "图像尺寸",
                 }),
             },
             "optional": {
-                "seed": ("INT", {
-                    "default": -1,
-                    "min": -1,
-                    "max": 102400,
-                    "label": "随机种子",
+                "种子": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xFFFFFFFFFFFFFFFF,
+                    "control_after_generate": "randomize",
+                    "tooltip": "随机种子，每次生成后自动随机",
                 }),
                 "top_p": ("FLOAT", {
                     "default": 0.95,
@@ -151,20 +153,7 @@ class CYBananaV2:
                             image_size: str, top_p: float = 0.65,
                             input_images: List[torch.Tensor] = None) -> Dict:
         """构建请求数据"""
-        if seed != -1:
-            np.random.seed(seed)
-            random.seed(seed)
-            style_variations = [
-                "detailed, high quality",
-                "masterpiece, ultra detailed",
-                "photorealistic, stunning",
-                "artistic, beautiful composition",
-                "vibrant colors, sharp focus"
-            ]
-            style = style_variations[seed % len(style_variations)]
-            final_prompt = f"{prompt}, {style}"
-        else:
-            final_prompt = prompt
+        final_prompt = prompt
 
         parts = [{"text": final_prompt}]
 
@@ -186,19 +175,12 @@ class CYBananaV2:
             "maxOutputTokens": 8192,
         }
 
-        image_config = {}
-        if aspect_ratio and aspect_ratio != "Auto":
-            image_config["aspectRatio"] = aspect_ratio
-        else:
-            image_config["aspectRatio"] = "1:1"
-
-        if image_size and image_size != "Auto":
-            image_config["imageSize"] = image_size
-
+        image_config = {
+            "aspectRatio": aspect_ratio,
+            "imageSize": image_size,
+        }
         generation_config["imageConfig"] = image_config
-
-        if seed != -1:
-            generation_config["seed"] = seed
+        generation_config["seed"] = seed
 
         request_data = {
             "contents": [{
@@ -320,10 +302,10 @@ class CYBananaV2:
         api_base_url = kwargs.get("中转网址", DEFAULT_RELAY_BASE_URL)
         model_type = kwargs.get("模型", "gemini-3-pro-image-preview")
         concurrency = kwargs.get("并发通道", 1)
-        aspect_ratio = kwargs.get("默认宽高比", "Auto")
-        image_size = kwargs.get("图像尺寸", "Auto")
+        aspect_ratio = kwargs.get("默认宽高比", "4:3")
+        image_size = kwargs.get("图像尺寸", "1K")
         api_key = kwargs.get("Key1", "")
-        seed = kwargs.get("seed", -1)
+        seed = kwargs.get("种子", 0)
         top_p = kwargs.get("top_p", 0.95)
 
         # 限制并发通道最大为3
@@ -341,8 +323,8 @@ class CYBananaV2:
             api_key = CONFIG.get("gemini_v2", "api_key", fallback="")
 
         if not api_key or api_key in ["your-api-key-here", "your-api-key-here-v2", ""]:
-            error_msg = "❌ 请填写 API Key"
-            return (torch.zeros((1, 64, 64, 3), dtype=torch.float32), error_msg)
+            print("❌ 请填写 API Key")
+            return (torch.zeros((1, 64, 64, 3), dtype=torch.float32),)
 
         # 保存API Key到配置
         if api_key != CONFIG.get("gemini_v2", "api_key", fallback=""):
@@ -409,8 +391,10 @@ class CYBananaV2:
         total_time = time.time() - start_time
 
         if not all_b64_images:
-            error_text = f"⚠️ 未生成任何图像\n总耗时: {total_time:.2f}s\n\n" + "\n".join(all_texts)
-            return (torch.zeros((1, 64, 64, 3), dtype=torch.float32), error_text)
+            print(f"⚠️ 未生成任何图像 - 总耗时: {total_time:.2f}s")
+            for txt in all_texts:
+                print(txt)
+            return (torch.zeros((1, 64, 64, 3), dtype=torch.float32),)
 
         print(f"\n🖼️ 解码 {len(all_b64_images)} 张图片...")
         image_tensor = self.base64_to_tensor_parallel(all_b64_images)
@@ -426,10 +410,11 @@ class CYBananaV2:
             combined_text += "\n\n" + "\n".join(all_texts)
 
         print(f"\n{'=' * 50}")
-        print(f"✅ 完成! 生成 {actual_count} 张图片")
+        print(f"✅ 完成! 生成 {actual_count} 张图片 (比例: {ratio_text}, 尺寸: {size_text})")
+        print(f"总耗时: {total_time:.2f}s")
         print(f"{'=' * 50}\n")
 
-        return (image_tensor, combined_text)
+        return (image_tensor,)
 
 
 # 注册节点
