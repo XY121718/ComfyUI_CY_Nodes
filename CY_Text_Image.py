@@ -256,7 +256,7 @@ class CYTextToImage:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 15}),
                 RELAY_FIELD_LABEL: (
                     "STRING",
                     {

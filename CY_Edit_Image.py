@@ -17,7 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DEFAULT_RELAY_BASE_URL = "https://api.xheai.cc"
 EDIT_ENDPOINT_PATH = "/v1/images/edits"
-REQUEST_TIMEOUT = 300
+REQUEST_TIMEOUT = 600  # 10分钟，等待生图返回
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
@@ -88,12 +88,6 @@ ASPECT_DISPLAY_MAP = {
     "21:9": "21:9",
 }
 
-RESPONSE_DISPLAY_MAP = {
-    "URL": "url",
-    "Base64": "b64_json",
-}
-DEFAULT_RESPONSE_OPTION = "URL"
-
 IMAGE_SIZE_DISPLAY_MAP = {
     "Auto": "Auto",
     "1K": "1K",
@@ -163,28 +157,29 @@ def extract_image_entries(response_json):
     return None
 
 
-def make_request_with_retry(method, url, max_retries=5, timeout=REQUEST_TIMEOUT, backoff=2, **kwargs):
+def make_request(method, url, timeout=REQUEST_TIMEOUT, **kwargs):
+    """发送请求，不重试"""
     kwargs.setdefault("verify", False)
+    response = requests.request(method, url, timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response
+
+
+def download_image_with_retry(url, max_retries=3, timeout=120):
+    """下载图片，带重试机制"""
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
-            response = requests.request(method, url, timeout=timeout, **kwargs)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.HTTPError as exc:
+            res = requests.get(url, timeout=timeout, verify=False)
+            if res.status_code == 200:
+                return Image.open(io.BytesIO(res.content)).convert("RGB")
+            last_error = Exception(f"HTTP {res.status_code}")
+        except Exception as exc:
             last_error = exc
-            if 400 <= exc.response.status_code < 500:
-                raise
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-            last_error = exc
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
+            print(f"[WARN] 图片下载失败 (尝试 {attempt}/{max_retries}): {exc}")
         if attempt < max_retries:
-            sleep_time = min(backoff**attempt, 20)
-            time.sleep(sleep_time)
-    if last_error:
-        raise last_error
-    raise RuntimeError("Unknown request failure")
+            time.sleep(2 ** attempt)
+    raise last_error or Exception("图片下载失败")
 
 
 def download_process(response_json, target_w=None, target_h=None, strict_mode=False):
@@ -205,11 +200,10 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
                     pass
             elif "url" in item:
                 try:
-                    res = requests.get(item["url"], timeout=60, verify=False)
-                    if res.status_code == 200:
-                        image_objects.append(Image.open(io.BytesIO(res.content)).convert("RGB"))
-                except Exception:
-                    pass
+                    img = download_image_with_retry(item["url"])
+                    image_objects.append(img)
+                except Exception as e:
+                    print(f"[WARN] 图片下载最终失败: {e}")
     elif "choices" in response_json:
         content = response_json["choices"][0]["message"]["content"]
 
@@ -225,11 +219,10 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
             urls = re.findall(r"(https?://[^\s)\]\"']+)", content)
             for url in urls:
                 try:
-                    res = requests.get(url, timeout=60, verify=False)
-                    if res.status_code == 200:
-                        image_objects.append(Image.open(io.BytesIO(res.content)).convert("RGB"))
-                except Exception:
-                    pass
+                    img = download_image_with_retry(url)
+                    image_objects.append(img)
+                except Exception as e:
+                    print(f"[WARN] 图片下载最终失败: {e}")
     else:
         raise Exception("No images were returned by the API.")
 
@@ -267,7 +260,6 @@ class CYImageEdit:
     IMAGE_SIZE_OPTIONS = [size for size in IMAGE_SIZE_DISPLAY_MAP.keys() if size != "Auto"]
     IMAGE_INPUT_NAMES = [f"输入{i}" for i in range(1, 9)]
     IMAGE_LEGACY_NAMES = [f"image_{i}" for i in range(1, 9)]
-    RESPONSE_OPTIONS = list(RESPONSE_DISPLAY_MAP.keys())
 
     def __init__(self):
         self._cached_outputs = [None] * len(self.RETURN_TYPES)
@@ -289,7 +281,7 @@ class CYImageEdit:
 
         return {
             "required": {
-                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词"}),
+                "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 15}),
                 RELAY_FIELD_LABEL: (
                     "STRING",
                     {
@@ -302,10 +294,6 @@ class CYImageEdit:
                 "Key1": (
                     "STRING",
                     {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},
-                ),
-                "响应格式": (
-                    cls.RESPONSE_OPTIONS,
-                    {"default": DEFAULT_RESPONSE_OPTION, "label": "响应格式"},
                 ),
                 "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
                 "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
@@ -361,11 +349,6 @@ class CYImageEdit:
         api_key_clean = resolve_key("api_key", "Key1", "api_key")
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
-
-        response_option = self._get_input_value(
-            inputs, "响应格式", "response_format", default=DEFAULT_RESPONSE_OPTION
-        )
-        response_value = resolve_display_value(response_option, RESPONSE_DISPLAY_MAP, "response format")
 
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
@@ -479,7 +462,6 @@ class CYImageEdit:
             match_reference_size,
             exec_configs,
             relay_clean,
-            response_value,
             image_groups=exec_image_groups,
             output_positions=output_positions,
         )
@@ -498,7 +480,6 @@ class CYImageEdit:
         match_reference_size: bool,
         channel_configs: List[dict],
         relay_base_url: str,
-        response_format_value: str,
         image_groups: Optional[List[List[int]]] = None,
         output_positions: Optional[List[int]] = None,
     ):
@@ -530,14 +511,14 @@ class CYImageEdit:
                 "model": model_value,
                 "prompt": prompt_value,
                 "aspect_ratio": aspect_for_call,
-                "response_format": response_format_value,
+                "response_format": "url",
             }
 
             if image_size_value != "Auto":
                 payload["image_size"] = image_size_value
 
             headers = {"Authorization": f"Bearer {current_key}"}
-            res = make_request_with_retry(
+            res = make_request(
                 "post",
                 endpoint,
                 headers=headers,
