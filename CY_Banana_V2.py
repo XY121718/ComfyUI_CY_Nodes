@@ -67,11 +67,12 @@ class CYBananaV2:
                     "default": "gemini-3-pro-image-preview",
                     "label": "模型",
                 }),
-                "批次数量": ("INT", {
+                "并发通道": ("INT", {
                     "default": 1,
                     "min": 1,
-                    "max": 8,
-                    "label": "批次数量",
+                    "max": 3,
+                    "label": "并发通道",
+                    "tooltip": "1=单通道，2-3=多通道并发",
                 }),
                 "默认宽高比": (ASPECT_OPTIONS, {
                     "default": "Auto",
@@ -96,20 +97,7 @@ class CYBananaV2:
                     "step": 0.01,
                     "label": "Top-P",
                 }),
-                "并发线程": ("INT", {
-                    "default": 2,
-                    "min": 1,
-                    "max": 8,
-                    "label": "并发线程",
-                    "tooltip": "并发线程数，建议2-4",
-                }),
-                "请求超时": ("INT", {
-                    "default": 180,
-                    "min": 30,
-                    "max": 600,
-                    "label": "请求超时",
-                    "tooltip": "单个请求超时时间(秒)",
-                }),
+
                 "输入图像1": ("IMAGE",),
                 "输入图像2": ("IMAGE",),
                 "输入图像3": ("IMAGE",),
@@ -302,7 +290,7 @@ class CYBananaV2:
             base64_images, text_content = self.extract_content(response_data)
             task_time = time.time() - task_start
 
-            print(f"批次 {i + 1} ✅ 完成 - 生成 {len(base64_images)} 张图片 - 耗时 {task_time:.2f}s")
+            print(f"通道 {i + 1} ✅ 完成 - 生成 {len(base64_images)} 张图片 - 耗时 {task_time:.2f}s")
 
             return {
                 'index': i,
@@ -316,7 +304,7 @@ class CYBananaV2:
         except Exception as e:
             task_time = time.time() - task_start
             error_msg = str(e)[:200]
-            print(f"批次 {i + 1} ❌ 失败 - 耗时 {task_time:.2f}s - 错误: {error_msg}")
+            print(f"通道 {i + 1} ❌ 失败 - 耗时 {task_time:.2f}s - 错误: {error_msg}")
             return {
                 'index': i,
                 'success': False,
@@ -331,14 +319,15 @@ class CYBananaV2:
         prompt = kwargs.get("提示词", DEFAULT_PROMPT)
         api_base_url = kwargs.get("中转网址", DEFAULT_RELAY_BASE_URL)
         model_type = kwargs.get("模型", "gemini-3-pro-image-preview")
-        batch_size = kwargs.get("批次数量", 1)
+        concurrency = kwargs.get("并发通道", 1)
         aspect_ratio = kwargs.get("默认宽高比", "Auto")
         image_size = kwargs.get("图像尺寸", "Auto")
         api_key = kwargs.get("Key1", "")
         seed = kwargs.get("seed", -1)
         top_p = kwargs.get("top_p", 0.95)
-        max_workers = kwargs.get("并发线程", 2)
-        request_timeout = kwargs.get("请求超时", 180)
+
+        # 限制并发通道最大为3
+        concurrency = max(1, min(3, concurrency))
 
         # 获取输入图像
         input_images = []
@@ -365,88 +354,57 @@ class CYBananaV2:
 
         start_time = time.time()
 
-        # 设置种子
-        if seed == -1:
-            base_seed = random.randint(0, 102400)
-        else:
-            base_seed = seed
-
         all_b64_images = []
         all_texts = []
 
         print(f"\n{'=' * 50}")
         print(f"🎨 CY_Banana_V2 ⚡")
         print(f"{'=' * 50}")
-        print(f"批次: {batch_size} 张 | 比例: {aspect_ratio} | 尺寸: {image_size}")
-        print(f"并发: {min(max_workers, batch_size)} 线程 | 超时: {request_timeout}秒")
+        print(f"并发通道: {concurrency} | 比例: {aspect_ratio} | 尺寸: {image_size}")
         print(f"{'=' * 50}\n")
 
-        # 并发生成
-        if batch_size > 1:
-            tasks = []
-            for i in range(batch_size):
-                current_seed = base_seed + i if seed != -1 else -1
-                tasks.append((i, current_seed, api_key, prompt, model_type, aspect_ratio,
-                              image_size, top_p, input_images, api_base_url, request_timeout))
+        # 构建并发任务
+        tasks = []
+        for i in range(concurrency):
+            tasks.append((i, seed, api_key, prompt, model_type, aspect_ratio,
+                          image_size, top_p, input_images, api_base_url, REQUEST_TIMEOUT))
 
-            results = []
-            actual_workers = min(max_workers, batch_size)
+        results = []
 
-            with ThreadPoolExecutor(max_workers=actual_workers) as executor:
-                future_to_index = {executor.submit(self.generate_single_image, task): task[0]
-                                   for task in tasks}
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_to_index = {executor.submit(self.generate_single_image, task): task[0]
+                               for task in tasks}
 
-                for future in as_completed(future_to_index):
-                    try:
-                        result = future.result(timeout=request_timeout + 30)
-                        results.append(result)
-                    except TimeoutError:
-                        index = future_to_index[future]
-                        results.append({
-                            'index': index,
-                            'success': False,
-                            'error': '结果获取超时',
-                            'time': 0
-                        })
-                    except Exception as e:
-                        index = future_to_index[future]
-                        results.append({
-                            'index': index,
-                            'success': False,
-                            'error': str(e),
-                            'time': 0
-                        })
+            for future in as_completed(future_to_index):
+                try:
+                    result = future.result(timeout=REQUEST_TIMEOUT + 30)
+                    results.append(result)
+                except TimeoutError:
+                    index = future_to_index[future]
+                    results.append({
+                        'index': index,
+                        'success': False,
+                        'error': '结果获取超时',
+                        'time': 0
+                    })
+                except Exception as e:
+                    index = future_to_index[future]
+                    results.append({
+                        'index': index,
+                        'success': False,
+                        'error': str(e),
+                        'time': 0
+                    })
 
-            results.sort(key=lambda x: x['index'])
+        results.sort(key=lambda x: x['index'])
 
-            for result in results:
-                if result['success']:
-                    all_b64_images.extend(result['images'])
-                    if result.get('text'):
-                        all_texts.append(f"[批次 {result['index'] + 1}] {result['text']}")
-                else:
-                    all_texts.append(f"[批次 {result['index'] + 1}] ❌ {result.get('error', '未知错误')}")
-        else:
-            # 单张生成
-            current_seed = base_seed if seed != -1 else -1
-            try:
-                request_data = self.create_request_data(prompt, current_seed, aspect_ratio,
-                                                        image_size, top_p, input_images)
-                response_data = self.send_request(api_key, request_data, model_type,
-                                                  api_base_url, request_timeout)
-                base64_images, text_content = self.extract_content(response_data)
-
-                if base64_images:
-                    all_b64_images.extend(base64_images)
-                    print(f"✅ 成功生成 {len(base64_images)} 张图片")
-
-                if text_content:
-                    all_texts.append(text_content)
-
-            except Exception as e:
-                error_msg = f"❌ 生成失败: {str(e)}"
-                print(error_msg)
-                all_texts.append(error_msg)
+        for result in results:
+            if result['success']:
+                all_b64_images.extend(result['images'])
+                if result.get('text'):
+                    all_texts.append(f"[通道 {result['index'] + 1}] {result['text']}")
+            else:
+                all_texts.append(f"[通道 {result['index'] + 1}] ❌ {result.get('error', '未知错误')}")
 
         total_time = time.time() - start_time
 
