@@ -24,6 +24,10 @@
     const PROMPT_WIDGET_NAME = "提示词";
     const PROMPT_DEFAULT_ROWS = 8;
 
+    // 右上角按钮配置
+    const LINK_BUTTON_TEXT = "直达星核AI";
+    const LINK_BUTTON_URL = "https://api.xheai.cc";
+
     function setWidgetsHidden(widgets, hidden) {
         widgets.forEach((widget) => {
             if (widget) {
@@ -103,6 +107,59 @@
         widgets.forEach(maskKeyWidget);
     }
 
+    // 添加右上角链接按钮
+    function addLinkButton(node) {
+        if (node.__cyLinkButtonAdded) return;
+        node.__cyLinkButtonAdded = true;
+
+        const btnWidth = 70;
+        const btnHeight = 18;
+        const btnPadding = 8;
+
+        // 保存原始的 onDrawForeground
+        const originalDrawForeground = node.onDrawForeground;
+        node.onDrawForeground = function(ctx) {
+            if (originalDrawForeground) {
+                originalDrawForeground.call(this, ctx);
+            }
+
+            // 计算按钮位置（右上角，标题栏内）
+            const x = this.size[0] - btnWidth - btnPadding;
+            const y = -LiteGraph.NODE_TITLE_HEIGHT + (LiteGraph.NODE_TITLE_HEIGHT - btnHeight) / 2;
+
+            // 绘制按钮背景
+            ctx.fillStyle = "#4a9eff";
+            ctx.beginPath();
+            ctx.roundRect(x, y, btnWidth, btnHeight, 3);
+            ctx.fill();
+
+            // 绘制按钮文字
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "11px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(LINK_BUTTON_TEXT, x + btnWidth / 2, y + btnHeight / 2);
+        };
+
+        // 保存原始的 onMouseDown
+        const originalMouseDown = node.onMouseDown;
+        node.onMouseDown = function(e, localPos, graphCanvas) {
+            const x = this.size[0] - btnWidth - btnPadding;
+            const y = -LiteGraph.NODE_TITLE_HEIGHT + (LiteGraph.NODE_TITLE_HEIGHT - btnHeight) / 2;
+
+            // 检查是否点击了按钮区域
+            if (localPos[0] >= x && localPos[0] <= x + btnWidth &&
+                localPos[1] >= y && localPos[1] <= y + btnHeight) {
+                window.open(LINK_BUTTON_URL, "_blank");
+                return true; // 阻止事件继续传播
+            }
+
+            if (originalMouseDown) {
+                return originalMouseDown.call(this, e, localPos, graphCanvas);
+            }
+        };
+    }
+
     // 设置提示词输入框样式和高度
     function setupPromptWidget(node) {
         if (!Array.isArray(node.widgets)) return;
@@ -145,6 +202,9 @@
             nodeCreated(node) {
                 // 处理文生图和图片编辑节点
                 if (TEXT_TO_IMAGE_NODES.includes(node.comfyClass)) {
+                    // 添加右上角链接按钮
+                    addLinkButton(node);
+                    
                     if (!node.__cyKeyMaskReady) {
                         node.__cyKeyMaskReady = true;
                         setTimeout(() => {

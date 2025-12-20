@@ -24,7 +24,7 @@ CHAT_ENDPOINT_PATH = "/v1/chat/completions"
 REQUEST_TIMEOUT = 600  # 10分钟，等待生图返回
 
 # 需要走 chat/completions 接口的模型
-CHAT_API_MODELS = {"gemini-3-pro-image-preview-4k"}
+CHAT_API_MODELS = set()
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
@@ -80,7 +80,6 @@ DEFAULT_MODEL_MAP = {
     "nano-banana-2": "nano-banana-2",
     "nano-banana-2-2k": "nano-banana-2-2k",
     "nano-banana-2-4k": "nano-banana-2-4k",
-    "「CS」gemini-3-pro-image-preview-4k": "gemini-3-pro-image-preview-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -293,9 +292,9 @@ class CYTextToImage:
                     {
                         "default": 0,
                         "min": 0,
-                        "max": 0xFFFFFFFFFFFFFFFF,
+                        "max": 2147483647,
                         "control_after_generate": "randomize",
-                        "tooltip": "随机种子，每次生成后自动随机",
+                        "tooltip": "随机种子 (0-2147483647)，每次生成后自动随机",
                     },
                 ),
             },
@@ -451,6 +450,17 @@ class CYTextToImage:
 
         image_result = self._dispatch_requests(single_call, channel_configs, prompts, merge=True)
         return image_result
+
+    @staticmethod
+    def _split_prompts(prompt: str, max_segments: int = 5):
+        if not prompt:
+            return []
+        parts = [p.strip() for p in re.split(r"(?:\r?\n){2,}", prompt) if p.strip()]
+        if not parts:
+            return []
+        if len(parts) > max_segments:
+            print(f"[WARN] 仅保留前 {max_segments} 段提示词，多余的段落将被忽略。")
+        return parts[:max_segments]
 
     @staticmethod
     def _collect_channel_configs(primary_key: str, count: int):

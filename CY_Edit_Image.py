@@ -307,9 +307,9 @@ class CYImageEdit:
                     {
                         "default": 0,
                         "min": 0,
-                        "max": 0xFFFFFFFFFFFFFFFF,
+                        "max": 2147483647,
                         "control_after_generate": "randomize",
-                        "tooltip": "随机种子，每次生成后自动随机",
+                        "tooltip": "随机种子 (0-2147483647)，每次生成后自动随机",
                     },
                 ),
             },
