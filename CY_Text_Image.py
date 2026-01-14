@@ -76,6 +76,7 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
+    "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
     "nano-banana-2-2k": "nano-banana-2-2k",
@@ -104,6 +105,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -239,7 +241,7 @@ class CYTextToImage:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("图像输出",)
     IMAGE_OUTPUT_COUNT = 1
-    MAX_CONCURRENCY = 5
+    MAX_CONCURRENCY = 10
     FUNCTION = "run"
     CATEGORY = CATEGORY
 
@@ -257,12 +259,10 @@ class CYTextToImage:
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 8}),
                 RELAY_FIELD_LABEL: (
-                    "STRING",
+                    RELAY_URL_OPTIONS,
                     {
-                        "multiline": False,
+                        "default": RELAY_URL_OPTIONS[0],
                         "label": RELAY_FIELD_LABEL,
-                        "default": CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL),
-                        "tooltip": "示例：https://api.xheai.cc",
                     },
                 ),
                 "Key1": (
@@ -272,12 +272,12 @@ class CYTextToImage:
                 "模型": (cls.MODEL_OPTIONS, {"default": cls.MODEL_OPTIONS[0], "label": "模型"}),
                 "默认宽高比": (cls.ASPECT_OPTIONS, {"default": cls.ASPECT_OPTIONS[0], "label": "默认宽高比"}),
                 "图像尺寸": (cls.IMAGE_SIZE_OPTIONS, {"default": cls.IMAGE_SIZE_OPTIONS[0], "label": "图像尺寸"}),
-                "并发通道": (
+                "生成张数": (
                     "INT",
                     {
                         "default": 1,
-                        "label": "并发通道",
-                        "tooltip": "1=单通道，2-5=多通道",
+                        "label": "生成张数",
+                        "tooltip": "同时生成的图片数量，数值越大速度越快但消耗更多配额",
                         "min": 1,
                         "max": cls.MAX_CONCURRENCY,
                         "step": 1,
@@ -285,7 +285,7 @@ class CYTextToImage:
                 ),
                 "按行拆分提示词": (
                     "BOOLEAN",
-                    {"default": False, "label": "按行拆分提示词", "label_on": "开启", "label_off": "关闭"},
+                    {"default": False, "label": "批量提示词", "label_on": "开启", "label_off": "关闭", "tooltip": "两次回车分隔多段提示词，每段独立生成"},
                 ),
                 "种子": (
                     "INT",
@@ -321,7 +321,7 @@ class CYTextToImage:
 
         prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
-        concurrency_raw = self._get_input_value(inputs, "并发通道", "concurrency_channels", default=1)
+        concurrency_raw = self._get_input_value(inputs, "生成张数", "concurrency_channels", default=1)
         try:
             concurrency_value = int(concurrency_raw)
         except (TypeError, ValueError):
@@ -329,7 +329,7 @@ class CYTextToImage:
         concurrency_value = max(1, min(self.MAX_CONCURRENCY, concurrency_value))
 
         if concurrency_value > 1 and split_mode:
-            raise ValueError("并发通道与按行拆分提示词不可同时开启。")
+            raise ValueError("生成张数大于1时不可同时开启按行拆分提示词。")
 
         self._reset_cached_outputs()
 
@@ -355,7 +355,8 @@ class CYTextToImage:
             with CONFIG_PATH.open("w", encoding="utf-8") as fp:
                 CONFIG.write(fp)
 
-        model_value = resolve_display_value(model_select, self.MODEL_MAP, "model")
+        # 如果是预设模型则映射，否则直接使用用户输入的模型名
+        model_value = self.MODEL_MAP.get(model_select, model_select)
         aspect_value = resolve_display_value(aspect_ratio, ASPECT_DISPLAY_MAP, "aspect ratio")
         image_size_value = resolve_display_value(image_size, IMAGE_SIZE_DISPLAY_MAP, "image size")
         resolved_size = resolve_image_size(image_size_value, aspect_value) if image_size_value != "Auto" else None

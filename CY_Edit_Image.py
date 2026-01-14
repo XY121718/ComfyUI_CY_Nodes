@@ -97,6 +97,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -279,12 +280,10 @@ class CYImageEdit:
             "required": {
                 "提示词": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT, "label": "提示词", "dynamicPrompts": False, "rows": 8}),
                 RELAY_FIELD_LABEL: (
-                    "STRING",
+                    RELAY_URL_OPTIONS,
                     {
-                        "multiline": False,
+                        "default": RELAY_URL_OPTIONS[0],
                         "label": RELAY_FIELD_LABEL,
-                        "default": CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL),
-                        "tooltip": "示例：https://api.xheai.cc",
                     },
                 ),
                 "Key1": (
