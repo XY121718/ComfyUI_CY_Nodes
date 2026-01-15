@@ -72,8 +72,6 @@ DEFAULT_MODEL_MAP = {
     "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
-    "nano-banana-2-2k": "nano-banana-2-2k",
-    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -194,42 +192,59 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
 
     image_objects = []
 
-    entries = extract_image_entries(response_json)
+    # Gemini 格式: {"candidates": [{"content": {"parts": [{"inlineData": {"data": "..."}}]}}]}
+    if "candidates" in response_json:
+        candidates = response_json.get('candidates', [])
+        if candidates:
+            content = candidates[0].get('content', {})
+            parts = content.get('parts', []) if content else []
+            for part in parts:
+                if 'inlineData' in part and 'data' in part['inlineData']:
+                    try:
+                        b64_data = part['inlineData']['data']
+                        img = Image.open(io.BytesIO(base64.b64decode(b64_data))).convert("RGB")
+                        image_objects.append(img)
+                    except Exception as e:
+                        print(f"[WARN] Gemini base64 解码失败: {e}")
+    else:
+        # OpenAI 格式: {"data": [{"url": "...", "b64_json": "..."}]}
+        entries = extract_image_entries(response_json)
 
-    if entries:
-        for item in entries:
-            if item.get("url"):
+        if entries:
+            for item in entries:
+                if item.get("url"):
+                    try:
+                        img = download_image_with_retry(item["url"])
+                        image_objects.append(img)
+                    except Exception as e:
+                        print(f"[WARN] 图片下载最终失败: {e}")
+                elif item.get("b64_json"):
+                    try:
+                        img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
+                        image_objects.append(img)
+                    except Exception:
+                        pass
+        elif "choices" in response_json:
+            content = response_json["choices"][0]["message"]["content"]
+
+            b64_matches = re.findall(r"data:image/\w+;base64,([a-zA-Z0-9+/=]+)", content)
+            for b64_str in b64_matches:
                 try:
-                    img = download_image_with_retry(item["url"])
-                    image_objects.append(img)
-                except Exception as e:
-                    print(f"[WARN] 图片下载最终失败: {e}")
-            elif item.get("b64_json"):
-                try:
-                    img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
+                    img = Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
                     image_objects.append(img)
                 except Exception:
                     pass
-    elif "choices" in response_json:
-        content = response_json["choices"][0]["message"]["content"]
 
-        b64_matches = re.findall(r"data:image/\w+;base64,([a-zA-Z0-9+/=]+)", content)
-        for b64_str in b64_matches:
-            try:
-                img = Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
-                image_objects.append(img)
-            except Exception:
-                pass
+            if not image_objects:
+                urls = re.findall(r"(https?://[^\s)\]\"']+)", content)
+                for url in urls:
+                    try:
+                        img = download_image_with_retry(url)
+                        image_objects.append(img)
+                    except Exception as e:
+                        print(f"[WARN] 图片下载最终失败: {e}")
 
-        if not image_objects:
-            urls = re.findall(r"(https?://[^\s)\]\"']+)", content)
-            for url in urls:
-                try:
-                    img = download_image_with_retry(url)
-                    image_objects.append(img)
-                except Exception as e:
-                    print(f"[WARN] 图片下载最终失败: {e}")
-    else:
+    if not image_objects:
         raise Exception("No images were returned by the API.")
 
     final_tensors = []

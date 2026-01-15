@@ -79,8 +79,6 @@ DEFAULT_MODEL_MAP = {
     "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
-    "nano-banana-2-2k": "nano-banana-2-2k",
-    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
