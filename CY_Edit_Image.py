@@ -69,6 +69,7 @@ IMAGE_SIZE_MAP = {
 }
 
 DEFAULT_MODEL_MAP = {
+    "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
     "nano-banana-2-2k": "nano-banana-2-2k",
@@ -197,18 +198,18 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
 
     if entries:
         for item in entries:
-            if "b64_json" in item:
-                try:
-                    img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
-                    image_objects.append(img)
-                except Exception:
-                    pass
-            elif "url" in item:
+            if item.get("url"):
                 try:
                     img = download_image_with_retry(item["url"])
                     image_objects.append(img)
                 except Exception as e:
                     print(f"[WARN] 图片下载最终失败: {e}")
+            elif item.get("b64_json"):
+                try:
+                    img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
+                    image_objects.append(img)
+                except Exception:
+                    pass
     elif "choices" in response_json:
         content = response_json["choices"][0]["message"]["content"]
 
@@ -375,6 +376,9 @@ class CYImageEdit:
         prompt_list = prompt_segments if prompt_segments else [prompt]
 
         dispatch_prompts = prompt_list
+        if split_mode:
+            print(f"[CY图片编辑] 批量提示词模式: 拆分为 {len(dispatch_prompts)} 段")
+        
         channel_configs = self._collect_channel_configs(api_key_clean, len(dispatch_prompts))
         if not channel_configs:
             raise ValueError("Key1 是必填项。")
@@ -500,7 +504,9 @@ class CYImageEdit:
             }
 
             if image_size_value != "Auto":
-                payload["image_size"] = image_size_value
+                payload["image_size"] = image_size_value.lower()
+
+            print(f"[CY图片编辑] API请求参数: {payload}")
 
             headers = {"Authorization": f"Bearer {current_key}"}
             res = make_request(
@@ -512,6 +518,7 @@ class CYImageEdit:
                 timeout=REQUEST_TIMEOUT,
             )
             res_json = res.json()
+            print(f"[CY图片编辑] API返回: {res_json}")
 
             target_w = target_h = None
             strict_mode = False

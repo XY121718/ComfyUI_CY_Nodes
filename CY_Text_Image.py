@@ -370,8 +370,10 @@ class CYTextToImage:
 
         if split_mode:
             dispatch_prompts = prompt_list
+            print(f"[CY文生图] 批量提示词模式: 拆分为 {len(dispatch_prompts)} 段")
         else:
             dispatch_prompts = [prompt_list[0]] * concurrency_value
+            print(f"[CY文生图] 并发生成: {concurrency_value} 张")
 
         channel_configs = self._collect_channel_configs(api_key_clean, len(dispatch_prompts))
         if not channel_configs:
