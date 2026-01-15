@@ -36,6 +36,15 @@ else:
     with CONFIG_PATH.open("w", encoding="utf-8") as fp:
         CONFIG.write(fp)
 
+MASTER_KEY_PATH = Path(__file__).with_name("master_key.ini")
+MASTER_KEY_CONFIG = configparser.ConfigParser()
+if MASTER_KEY_PATH.exists():
+    MASTER_KEY_CONFIG.read(MASTER_KEY_PATH, encoding="utf-8")
+else:
+    MASTER_KEY_CONFIG["DEFAULT"] = {}
+    with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
+        MASTER_KEY_CONFIG.write(fp)
+
 IMAGE_SIZE_MAP = {
     "1K": {
         "1:1": "1024x1024",
@@ -264,7 +273,7 @@ class CYTextToImage:
                     },
                 ),
                 "总Key": ("STRING", {
-                    "default": "",
+                    "default": MASTER_KEY_CONFIG["DEFAULT"].get("master_key", ""),
                     "label": "总Key（创建令牌用）",
                     "tooltip": "填入总Key后点击创建令牌按钮，仅 api.xheai.cc 支持"
                 }),
@@ -350,6 +359,13 @@ class CYTextToImage:
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
 
+        # 保存总Key到单独文件
+        master_key_input = self._get_input_value(inputs, "总Key", default="").strip()
+        if master_key_input and master_key_input != MASTER_KEY_CONFIG["DEFAULT"].get("master_key", ""):
+            MASTER_KEY_CONFIG["DEFAULT"]["master_key"] = master_key_input
+            with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
+                MASTER_KEY_CONFIG.write(fp)
+
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
         image_size = self._get_input_value(inputs, "图像尺寸", "image_size", default=self.IMAGE_SIZE_OPTIONS[0])
@@ -373,6 +389,9 @@ class CYTextToImage:
             dispatch_prompts = [prompt_list[0]] * concurrency_value
             print(f"[CY文生图] 并发生成: {concurrency_value} 张")
 
+        # 获取种子值
+        seed_value = self._get_input_value(inputs, "种子", default=0)
+
         channel_configs = self._collect_channel_configs(api_key_clean, len(dispatch_prompts))
         if not channel_configs:
             raise ValueError("Key1 是必填项。")
@@ -387,6 +406,7 @@ class CYTextToImage:
             1,
             channel_configs,
             relay_clean,
+            seed=seed_value,
         )
 
         image_output = None
@@ -412,6 +432,7 @@ class CYTextToImage:
         count: int,
         channel_configs: List[dict],
         relay_base_url: str,
+        seed: int = 0,
     ):
         # 根据模型选择接口
         use_chat_api = model_value in CHAT_API_MODELS
@@ -450,8 +471,22 @@ class CYTextToImage:
                     if resolved_size:
                         payload["size"] = resolved_size
 
+            # 精简日志：只显示关键信息
+            prompt_preview = prompt_value[:20] + "..." if len(prompt_value) > 20 else prompt_value
+            print(f"[CY文生图] 请求: model={model_value}, prompt=\"{prompt_preview}\", seed={seed}")
+            
             res = make_request("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
             res_json = res.json()
+            
+            # 统计返回图片数量
+            img_count = 0
+            entries = extract_image_entries(res_json)
+            if entries:
+                img_count = len(entries)
+            elif "choices" in res_json:
+                img_count = 1
+            print(f"[CY文生图] 返回: {img_count}张图片")
+            
             return download_process(res_json)
 
         image_result = self._dispatch_requests(single_call, channel_configs, prompts, merge=True)
