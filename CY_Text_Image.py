@@ -105,7 +105,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
-RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top", "http://localhost:3000"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -265,6 +265,11 @@ class CYTextToImage:
                         "label": RELAY_FIELD_LABEL,
                     },
                 ),
+                "总Key": ("STRING", {
+                    "default": "",
+                    "label": "总Key（创建令牌用）",
+                    "tooltip": "填入总Key后点击创建令牌按钮，仅 api.xheai.cc 支持"
+                }),
                 "Key1": (
                     "STRING",
                     {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},

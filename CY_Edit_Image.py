@@ -97,7 +97,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
-RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top", "http://localhost:3000"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -124,12 +124,16 @@ def tensor_to_pil(image_tensor):
     return Image.fromarray(array)
 
 
-def preprocess_image_file(image_tensor, filename, max_side=1568):
+def preprocess_image_file(image_tensor, filename, max_side=1536):
     pil = tensor_to_pil(image_tensor)
     w, h = pil.size
     if w > max_side or h > max_side:
         ratio = min(max_side / w, max_side / h)
-        pil = pil.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+        print(f"[CY图片编辑] 图片压缩: {w}x{h} → {new_w}x{new_h}")
+        pil = pil.resize((new_w, new_h), Image.LANCZOS)
+    else:
+        print(f"[CY图片编辑] 图片尺寸正常: {w}x{h}，无需压缩")
 
     buffered = io.BytesIO()
     pil.save(buffered, format="PNG")
@@ -286,6 +290,11 @@ class CYImageEdit:
                         "label": RELAY_FIELD_LABEL,
                     },
                 ),
+                "总Key": ("STRING", {
+                    "default": "",
+                    "label": "总Key（创建令牌用）",
+                    "tooltip": "填入总Key后点击创建令牌按钮，仅 api.xheai.cc 支持"
+                }),
                 "Key1": (
                     "STRING",
                     {"multiline": False, "label": "Key1（必填）", "default": CONFIG["DEFAULT"].get("api_key", "")},

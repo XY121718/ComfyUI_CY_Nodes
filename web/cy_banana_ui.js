@@ -28,6 +28,256 @@
     const LINK_BUTTON_TEXT = "直达星核AI";
     const LINK_BUTTON_URL = "https://api.xheai.cc";
 
+    // 创建令牌配置
+    const TOKEN_API_PATH = "/api/open/token";
+    const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc", "http://localhost:3000"];
+
+    // 显示分组选择弹窗
+    function showGroupSelector(groups, onSelect) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); z-index: 99999;
+            display: flex; align-items: center; justify-content: center;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            background: #2a2a2a; border-radius: 12px; padding: 24px;
+            min-width: 320px; max-width: 90vw; color: #fff;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        `;
+
+        const title = document.createElement('h3');
+        title.textContent = '选择分组';
+        title.style.cssText = 'margin: 0 0 16px; font-size: 18px; font-weight: 600;';
+        modal.appendChild(title);
+
+        const hint = document.createElement('p');
+        hint.textContent = '该模型存在多个分组，请选择一个：';
+        hint.style.cssText = 'margin: 0 0 16px; font-size: 14px; color: #aaa;';
+        modal.appendChild(hint);
+
+        const list = document.createElement('div');
+        list.style.cssText = 'display: flex; flex-direction: column; gap: 8px;';
+
+        groups.forEach(group => {
+            const btn = document.createElement('button');
+            btn.textContent = group;
+            btn.style.cssText = `
+                display: block; width: 100%; padding: 12px 16px;
+                background: #3a3a3a; border: 1px solid #4a4a4a;
+                color: #fff; border-radius: 8px; cursor: pointer;
+                font-size: 14px; text-align: left;
+                transition: all 0.2s;
+            `;
+            btn.onmouseover = () => {
+                btn.style.background = '#4a9eff';
+                btn.style.borderColor = '#4a9eff';
+            };
+            btn.onmouseout = () => {
+                btn.style.background = '#3a3a3a';
+                btn.style.borderColor = '#4a4a4a';
+            };
+            btn.onclick = () => {
+                document.body.removeChild(overlay);
+                onSelect(group);
+            };
+            list.appendChild(btn);
+        });
+
+        modal.appendChild(list);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = '取消';
+        cancelBtn.style.cssText = `
+            margin-top: 16px; padding: 10px 20px;
+            background: transparent; border: 1px solid #555;
+            color: #aaa; border-radius: 6px; cursor: pointer;
+            font-size: 14px;
+        `;
+        cancelBtn.onclick = () => document.body.removeChild(overlay);
+        modal.appendChild(cancelBtn);
+
+        overlay.appendChild(modal);
+        overlay.onclick = (e) => {
+            if (e.target === overlay) document.body.removeChild(overlay);
+        };
+        document.body.appendChild(overlay);
+    }
+
+    // 显示消息弹窗（成功/失败）
+    function showMessage(message, isSuccess = true) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 99999;
+            display: flex; align-items: center; justify-content: center;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            background: #2a2a2a; border-radius: 12px; padding: 24px 32px;
+            min-width: 280px; max-width: 90vw; color: #fff;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            text-align: center;
+        `;
+
+        const icon = document.createElement('div');
+        icon.textContent = isSuccess ? '✅' : '❌';
+        icon.style.cssText = 'font-size: 48px; margin-bottom: 16px;';
+        modal.appendChild(icon);
+
+        const text = document.createElement('p');
+        text.textContent = message;
+        text.style.cssText = `
+            margin: 0 0 20px; font-size: 16px; line-height: 1.5;
+            color: ${isSuccess ? '#4ade80' : '#f87171'};
+        `;
+        modal.appendChild(text);
+
+        const okBtn = document.createElement('button');
+        okBtn.textContent = '确定';
+        okBtn.style.cssText = `
+            padding: 10px 32px; background: ${isSuccess ? '#4a9eff' : '#666'};
+            border: none; color: #fff; border-radius: 6px;
+            cursor: pointer; font-size: 14px;
+        `;
+        okBtn.onclick = () => document.body.removeChild(overlay);
+        modal.appendChild(okBtn);
+
+        overlay.appendChild(modal);
+        overlay.onclick = (e) => {
+            if (e.target === overlay) document.body.removeChild(overlay);
+        };
+        document.body.appendChild(overlay);
+
+        // 自动聚焦确定按钮，按回车可关闭
+        okBtn.focus();
+    }
+
+    // 创建令牌
+    async function createToken(node, group = null) {
+        const relayWidget = node.widgets.find(w => w.name === "中转网址");
+        const masterKeyWidget = node.widgets.find(w => w.name === "总Key");
+        const modelWidget = node.widgets.find(w => w.name === "模型");
+        const key1Widget = node.widgets.find(w => w.name === "Key1");
+
+        if (!masterKeyWidget?.value?.trim()) {
+            showMessage("请先填写总Key", false);
+            return;
+        }
+
+        const baseUrl = relayWidget?.value || SUPPORTED_RELAY_URLS[0];
+        const tokenApiUrl = baseUrl.replace(/\/+$/, '') + TOKEN_API_PATH;
+        const model = modelWidget?.value || "gemini-3-pro-image-preview";
+
+        try {
+            const body = { model };
+            if (group) body.group = group;
+
+            const resp = await fetch(tokenApiUrl, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${masterKeyWidget.value.trim()}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(body)
+            });
+
+            const result = await resp.json();
+
+            if (result.data?.need_select) {
+                // 需要选择分组
+                showGroupSelector(result.data.groups || [], async (selectedGroup) => {
+                    await createToken(node, selectedGroup);
+                });
+            } else if (result.success && result.data?.key) {
+                // 成功获取令牌
+                if (key1Widget) {
+                    key1Widget.value = result.data.key;
+                    if (key1Widget.inputEl) {
+                        key1Widget.inputEl.value = result.data.key;
+                    }
+                }
+                showMessage("令牌创建成功！已自动填入Key1", true);
+            } else {
+                showMessage("创建失败: " + (result.message || "未知错误"), false);
+            }
+        } catch (e) {
+            showMessage("请求失败: " + e.message, false);
+        }
+    }
+
+    // 添加创建令牌按钮
+    function addCreateTokenButton(node) {
+        if (node.__cyTokenButtonAdded) return;
+        node.__cyTokenButtonAdded = true;
+
+        // 查找中转网址和总Key的位置
+        const relayWidget = node.widgets.find(w => w.name === "中转网址");
+        const masterKeyWidget = node.widgets.find(w => w.name === "总Key");
+
+        if (!relayWidget || !masterKeyWidget) return;
+
+        // 创建按钮 widget
+        const tokenButton = node.addWidget("button", "创建令牌", "创建令牌", async () => {
+            await createToken(node);
+        });
+
+        tokenButton.options = tokenButton.options || {};
+        tokenButton.options.serialize = false;
+
+        // 移动按钮到总Key后面
+        const btnIndex = node.widgets.indexOf(tokenButton);
+        const masterKeyIndex = node.widgets.indexOf(masterKeyWidget);
+        if (btnIndex > -1 && masterKeyIndex > -1 && btnIndex !== masterKeyIndex + 1) {
+            node.widgets.splice(btnIndex, 1);
+            node.widgets.splice(masterKeyIndex + 1, 0, tokenButton);
+        }
+
+        // 根据中转网址显示/隐藏按钮和总Key
+        const updateVisibility = () => {
+            // 下拉框可能用 value 或 inputEl.value
+            const currentValue = relayWidget.value || relayWidget.inputEl?.value || "";
+            const isSupported = SUPPORTED_RELAY_URLS.some(url => currentValue.includes(url) || url.includes(currentValue));
+            console.log("[CY] 中转网址:", currentValue, "支持创建令牌:", isSupported);
+            masterKeyWidget.hidden = !isSupported;
+            tokenButton.hidden = !isSupported;
+            node.setDirtyCanvas?.(true, true);
+            node.graph?.setDirtyCanvas(true, true);
+        };
+
+        // 初始化可见性
+        setTimeout(updateVisibility, 100);
+        setTimeout(updateVisibility, 500);
+
+        // 监听中转网址变化 - combo widget 使用 callback
+        const originalCallback = relayWidget.callback;
+        relayWidget.callback = function (value) {
+            if (originalCallback) originalCallback.call(this, value);
+            setTimeout(updateVisibility, 50);
+        };
+
+        // 也监听 onChange（某些版本的 ComfyUI）
+        if (!relayWidget._cyOnChangeSet) {
+            relayWidget._cyOnChangeSet = true;
+            const originalOnChange = relayWidget.onChange;
+            relayWidget.onChange = function (value) {
+                if (originalOnChange) originalOnChange.call(this, value);
+                setTimeout(updateVisibility, 50);
+            };
+        }
+
+        // 遮罩总Key输入框
+        setTimeout(() => {
+            if (masterKeyWidget.inputEl) {
+                masterKeyWidget.inputEl.type = "password";
+                masterKeyWidget.inputEl.autocomplete = "off";
+            }
+        }, 300);
+    }
+
     function setWidgetsHidden(widgets, hidden) {
         widgets.forEach((widget) => {
             if (widget) {
@@ -204,6 +454,11 @@
                 if (TEXT_TO_IMAGE_NODES.includes(node.comfyClass)) {
                     // 添加右上角链接按钮
                     addLinkButton(node);
+
+                    // 为 CYTextToImage 和 CYImageEdit 添加创建令牌按钮
+                    if (node.comfyClass === "CYTextToImage" || node.comfyClass === "CYImageEdit") {
+                        setTimeout(() => addCreateTokenButton(node), 200);
+                    }
                     
                     if (!node.__cyKeyMaskReady) {
                         node.__cyKeyMaskReady = true;
