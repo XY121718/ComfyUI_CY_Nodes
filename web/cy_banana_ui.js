@@ -30,7 +30,7 @@
 
     // 创建令牌配置
     const TOKEN_API_PATH = "/api/open/token";
-    const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc", "http://localhost:3000"];
+    const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc"];
 
     // 显示分组选择弹窗
     function showGroupSelector(groups, onSelect) {
@@ -452,6 +452,19 @@
             nodeCreated(node) {
                 // 处理文生图和图片编辑节点
                 if (TEXT_TO_IMAGE_NODES.includes(node.comfyClass)) {
+                    // 修复复制节点时"生成张数"变成NaN的问题
+                    if (node.comfyClass === "CYTextToImage") {
+                        setTimeout(() => {
+                            const concurrencyWidget = node.widgets?.find(w => w.name === "生成张数");
+                            if (concurrencyWidget && (isNaN(concurrencyWidget.value) || concurrencyWidget.value === null || concurrencyWidget.value === undefined)) {
+                                concurrencyWidget.value = 1;
+                                if (concurrencyWidget.inputEl) {
+                                    concurrencyWidget.inputEl.value = "1";
+                                }
+                            }
+                        }, 100);
+                    }
+
                     // 添加右上角链接按钮
                     addLinkButton(node);
 

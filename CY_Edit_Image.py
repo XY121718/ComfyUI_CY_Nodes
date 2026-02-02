@@ -81,6 +81,8 @@ DEFAULT_MODEL_MAP = {
     "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
+    "nano-banana-2-2k": "nano-banana-2-2k",
+    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -105,7 +107,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
-RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top", "http://localhost:3000"]
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -197,6 +199,11 @@ def download_image_with_retry(url, max_retries=3, timeout=120):
 
 def download_process(response_json, target_w=None, target_h=None, strict_mode=False):
     if "error" in response_json:
+        error_msg = response_json['error']
+        # 如果是 no images generated 错误，返回 None 而不是抛出异常
+        if isinstance(error_msg, dict) and error_msg.get('message') == 'no images generated':
+            print(f"[WARN] API 未生成图片: {error_msg}")
+            return None
         raise Exception(f"API Error: {response_json['error']}")
 
     image_objects = []
@@ -254,7 +261,8 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
                         print(f"[WARN] 图片下载最终失败: {e}")
 
     if not image_objects:
-        raise Exception("No images were returned by the API.")
+        print(f"[WARN] API 未返回任何图片")
+        return None
 
     final_tensors = []
     base_w, base_h = target_w, target_h
@@ -271,7 +279,8 @@ def download_process(response_json, target_w=None, target_h=None, strict_mode=Fa
         final_tensors.append(torch.from_numpy(img_np))
 
     if not final_tensors:
-        raise Exception("No image tensors were created from the API response.")
+        print(f"[WARN] 未能创建图片张量")
+        return None
 
     return (torch.stack(final_tensors),)
 
@@ -665,15 +674,33 @@ class CYImageEdit:
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    results[idx] = future.result()
+                    result = future.result()
+                    # 如果 API 返回 None（没有生成图片），记录但不报错
+                    if result is None:
+                        print(f"[WARN] API request #{idx + 1} 未返回图片，将跳过")
+                    results[idx] = result
                 except Exception as exc:  # noqa: BLE001
                     failures.append({"idx": idx, "exc": exc})
                     print(f"[WARN] API request #{idx + 1} failed: {exc}")
 
-        if failures:
-            raise failures[0]["exc"]
+        # 过滤掉 None 结果
+        valid_results = [r for r in results if r is not None]
+        
+        # 统计成功和失败的请求
+        success_count = len(valid_results)
+        total_count = len(tasks)
+        
+        if success_count < total_count:
+            print(f"[CY图片编辑] 部分请求失败: {success_count}/{total_count} 个请求成功")
+        
+        # 如果所有请求都失败了，才抛出异常
+        if not valid_results:
+            if failures:
+                raise failures[0]["exc"]
+            else:
+                raise RuntimeError("所有 API 请求都未返回图片")
 
-        return self._merge_results(results) if merge else results
+        return self._merge_results(valid_results) if merge else results
 
     @staticmethod
     def _merge_results(results):

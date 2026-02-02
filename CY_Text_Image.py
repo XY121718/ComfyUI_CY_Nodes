@@ -88,6 +88,8 @@ DEFAULT_MODEL_MAP = {
     "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
+    "nano-banana-2-2k": "nano-banana-2-2k",
+    "nano-banana-2-4k": "nano-banana-2-4k",
 }
 
 ASPECT_DISPLAY_MAP = {
@@ -112,7 +114,7 @@ IMAGE_SIZE_DISPLAY_MAP = {
 
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
-RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top", "http://localhost:3000"]
+RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -183,6 +185,11 @@ def download_image_with_retry(url, max_retries=3, timeout=120):
 
 def download_process(response_json):
     if "error" in response_json:
+        error_msg = response_json['error']
+        # 如果是 no images generated 错误，返回 None 而不是抛出异常
+        if isinstance(error_msg, dict) and error_msg.get('message') == 'no images generated':
+            print(f"[WARN] API 未生成图片: {error_msg}")
+            return None
         raise Exception(f"API Error: {response_json['error']}")
 
     image_objects = []
@@ -191,18 +198,22 @@ def download_process(response_json):
 
     if entries:
         for item in entries:
-            if "b64_json" in item:
+            # 优先尝试 URL（更可靠）
+            if "url" in item and item["url"]:
+                try:
+                    img = download_image_with_retry(item["url"])
+                    image_objects.append(img)
+                except Exception as e:
+                    print(f"[WARN] 图片下载失败: {e}")
+            # 然后尝试 b64_json
+            elif "b64_json" in item and item["b64_json"]:
                 try:
                     img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
                     image_objects.append(img)
                 except Exception as e:
                     print(f"[WARN] Base64 图片解码失败: {e}")
-            elif "url" in item:
-                try:
-                    img = download_image_with_retry(item["url"])
-                    image_objects.append(img)
-                except Exception as e:
-                    print(f"[WARN] 图片下载最终失败: {e}")
+            else:
+                print(f"[WARN] 未知的图片格式，字段: {list(item.keys())}")
     elif "choices" in response_json:
         content = response_json["choices"][0]["message"]["content"]
 
@@ -222,8 +233,10 @@ def download_process(response_json):
                     image_objects.append(img)
                 except Exception as e:
                     print(f"[WARN] 图片下载最终失败: {e}")
-    else:
-        raise Exception("No images were returned by the API.")
+
+    if not image_objects:
+        print(f"[WARN] API 未返回任何图片")
+        return None
 
     final_tensors = []
     base_w = base_h = None
@@ -238,7 +251,8 @@ def download_process(response_json):
         final_tensors.append(torch.from_numpy(img_np))
 
     if not final_tensors:
-        raise Exception("No image tensors were created from the API response.")
+        print(f"[WARN] 未能创建图片张量")
+        return None
 
     return (torch.stack(final_tensors),)
 
@@ -315,6 +329,12 @@ class CYTextToImage:
 
     @classmethod
     def IS_CHANGED(cls, **inputs):
+        # 确保生成张数是有效数值
+        concurrency = inputs.get("生成张数", 1)
+        try:
+            concurrency = int(concurrency) if concurrency else 1
+        except (TypeError, ValueError):
+            concurrency = 1
         return inputs.get("种子", random.random())
 
     def run(self, **inputs):
@@ -335,7 +355,7 @@ class CYTextToImage:
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
         concurrency_raw = self._get_input_value(inputs, "生成张数", "concurrency_channels", default=1)
         try:
-            concurrency_value = int(concurrency_raw)
+            concurrency_value = int(concurrency_raw) if concurrency_raw not in (None, "", "NaN") else 1
         except (TypeError, ValueError):
             concurrency_value = 1
         concurrency_value = max(1, min(self.MAX_CONCURRENCY, concurrency_value))
@@ -379,14 +399,18 @@ class CYTextToImage:
         aspect_value = resolve_display_value(aspect_ratio, ASPECT_DISPLAY_MAP, "aspect ratio")
         image_size_value = resolve_display_value(image_size, IMAGE_SIZE_DISPLAY_MAP, "image size")
         resolved_size = resolve_image_size(image_size_value, aspect_value) if image_size_value != "Auto" else None
-        prompt_segments = self._split_prompts(prompt) if split_mode else []
-        prompt_list = prompt_segments if prompt_segments else [prompt]
-
+        
+        # 处理提示词：如果开启拆分则拆分，否则使用原始提示词
         if split_mode:
-            dispatch_prompts = prompt_list
+            prompt_segments = self._split_prompts(prompt)
+            if not prompt_segments:
+                raise ValueError("开启批量提示词模式后，请使用两次回车分隔多段提示词。")
+            dispatch_prompts = prompt_segments
             print(f"[CY文生图] 批量提示词模式: 拆分为 {len(dispatch_prompts)} 段")
         else:
-            dispatch_prompts = [prompt_list[0]] * concurrency_value
+            # 并发模式：使用相同的提示词发起多个请求
+            # 注意：提示词中的换行符会被保留，不会被拆分
+            dispatch_prompts = [prompt] * concurrency_value
             print(f"[CY文生图] 并发生成: {concurrency_value} 张")
 
         # 获取种子值
@@ -473,7 +497,9 @@ class CYTextToImage:
 
             # 精简日志：只显示关键信息
             prompt_preview = prompt_value[:20] + "..." if len(prompt_value) > 20 else prompt_value
-            print(f"[CY文生图] 请求: model={model_value}, prompt=\"{prompt_preview}\", seed={seed}")
+            # 显示提示词中的换行符（用于调试）
+            prompt_debug = repr(prompt_value[:50])
+            print(f"[CY文生图] 请求: model={model_value}, prompt={prompt_debug}, n={payload.get('n', 'N/A')}, seed={seed}")
             
             res = make_request("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
             res_json = res.json()
@@ -543,15 +569,33 @@ class CYTextToImage:
             for future in as_completed(futures):
                 idx = futures[future]
                 try:
-                    results[idx] = future.result()
+                    result = future.result()
+                    # 如果 API 返回 None（没有生成图片），记录但不报错
+                    if result is None:
+                        print(f"[WARN] API request #{idx + 1} 未返回图片，将跳过")
+                    results[idx] = result
                 except Exception as exc:  # noqa: BLE001
                     failures.append({"idx": idx, "exc": exc})
                     print(f"[WARN] API request #{idx + 1} failed: {exc}")
 
-        if failures:
-            raise failures[0]["exc"]
+        # 过滤掉 None 结果
+        valid_results = [r for r in results if r is not None]
+        
+        # 统计成功和失败的请求
+        success_count = len(valid_results)
+        total_count = len(tasks)
+        
+        if success_count < total_count:
+            print(f"[CY文生图] 部分请求失败: {success_count}/{total_count} 个请求成功")
+        
+        # 如果所有请求都失败了，才抛出异常
+        if not valid_results:
+            if failures:
+                raise failures[0]["exc"]
+            else:
+                raise RuntimeError("所有 API 请求都未返回图片")
 
-        return self._merge_results(results) if merge else results
+        return self._merge_results(valid_results) if merge else results
 
     @staticmethod
     def _merge_results(results):
