@@ -1,0 +1,15 @@
+{
+    "name": "ComfyUI CY Nodes",
+    "version": "1.0.0",
+    "author": "CY",
+    "description": "基于 Gemini API 的图像生成和编辑节点，支持文生图、图片编辑等功能",
+    "homepage": "https://github.com/你的用户名/ComfyUI_CY_Nodes",
+    "license": "MIT",
+    "python_requires": ">=3.8",
+    "dependencies": [
+        "requests",
+        "Pillow",
+        "torch",
+        "numpy"
+    ]
+}

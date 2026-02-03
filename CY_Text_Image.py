@@ -28,6 +28,7 @@ CHAT_API_MODELS = set()
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
+CONFIG_LOCK = threading.Lock()
 CONFIG = configparser.ConfigParser()
 if CONFIG_PATH.exists():
     CONFIG.read(CONFIG_PATH, encoding="utf-8")
@@ -37,6 +38,7 @@ else:
         CONFIG.write(fp)
 
 MASTER_KEY_PATH = Path(__file__).with_name("master_key.ini")
+MASTER_KEY_LOCK = threading.Lock()
 MASTER_KEY_CONFIG = configparser.ConfigParser()
 if MASTER_KEY_PATH.exists():
     MASTER_KEY_CONFIG.read(MASTER_KEY_PATH, encoding="utf-8")
@@ -271,8 +273,7 @@ class CYTextToImage:
     ASPECT_OPTIONS = list(ASPECT_DISPLAY_MAP.keys())
     IMAGE_SIZE_OPTIONS = [size for size in IMAGE_SIZE_DISPLAY_MAP.keys() if size != "Auto"]
 
-    def __init__(self):
-        self._cached_outputs = [None] * len(self.RETURN_TYPES)
+    # 不需要 __init__ 方法，ComfyUI 会处理实例化
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -363,8 +364,6 @@ class CYTextToImage:
         if concurrency_value > 1 and split_mode:
             raise ValueError("生成张数大于1时不可同时开启按行拆分提示词。")
 
-        self._reset_cached_outputs()
-
         relay_default = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL)
         relay_input = self._get_input_value(
             inputs, RELAY_FIELD_LABEL, "relay_url", "relay_base_url", default=relay_default
@@ -379,20 +378,22 @@ class CYTextToImage:
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
 
-        # 保存总Key到单独文件
+        # 保存总Key到单独文件（加锁保护）
         master_key_input = self._get_input_value(inputs, "总Key", default="").strip()
         if master_key_input and master_key_input != MASTER_KEY_CONFIG["DEFAULT"].get("master_key", ""):
-            MASTER_KEY_CONFIG["DEFAULT"]["master_key"] = master_key_input
-            with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
-                MASTER_KEY_CONFIG.write(fp)
+            with MASTER_KEY_LOCK:
+                MASTER_KEY_CONFIG["DEFAULT"]["master_key"] = master_key_input
+                with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
+                    MASTER_KEY_CONFIG.write(fp)
 
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
         image_size = self._get_input_value(inputs, "图像尺寸", "image_size", default=self.IMAGE_SIZE_OPTIONS[0])
 
         if cfg_dirty:
-            with CONFIG_PATH.open("w", encoding="utf-8") as fp:
-                CONFIG.write(fp)
+            with CONFIG_LOCK:
+                with CONFIG_PATH.open("w", encoding="utf-8") as fp:
+                    CONFIG.write(fp)
 
         # 如果是预设模型则映射，否则直接使用用户输入的模型名
         model_value = self.MODEL_MAP.get(model_select, model_select)
@@ -634,55 +635,6 @@ class CYTextToImage:
             if name in source and source[name] is not None:
                 return source[name]
         return default
-
-    def _ensure_port_tuple(self, result, updated_ports=None, use_cache_fallback=True, skip_mask=None):
-        skip_flags = skip_mask or [False] * len(self.RETURN_TYPES)
-
-        outputs = list(self._cached_outputs)
-        refreshed_order = list(updated_ports or [])
-        refreshed_set = set(refreshed_order)
-
-        def normalize_value(value):
-            if isinstance(value, (tuple, list)) and len(value) == 1:
-                inner = value[0]
-                if isinstance(inner, torch.Tensor):
-                    return inner
-            return value
-
-        def assign_value(port_index: int, value):
-            value = normalize_value(value)
-            if value is not None:
-                outputs[port_index] = value
-            elif not use_cache_fallback and port_index in refreshed_set:
-                outputs[port_index] = None
-
-        if isinstance(result, tuple) and len(result) == len(self.RETURN_TYPES):
-            for idx, value in enumerate(result):
-                assign_value(idx, value)
-        elif isinstance(result, (tuple, list)):
-            seq = list(result)
-            if refreshed_order:
-                for seq_idx, port_idx in enumerate(refreshed_order):
-                    if seq_idx >= len(seq):
-                        break
-                    assign_value(port_idx, seq[seq_idx])
-            elif seq:
-                assign_value(0, seq[0])
-        elif result is not None:
-            assign_value(0, result)
-
-        for idx, skip in enumerate(skip_flags):
-            if skip:
-                outputs[idx] = None
-
-        self._cached_outputs = outputs
-        return tuple(outputs)
-
-    def _reset_cached_outputs(self):
-        self._cached_outputs = [None] * len(self.RETURN_TYPES)
-
-    def _has_cached_outputs(self):
-        return any(entry is not None for entry in self._cached_outputs)
 
 
 

@@ -1,3 +1,21 @@
-__pycache__/
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+
+# 配置文件（包含 API Key，不要提交）
 config.ini
-config_v2.ini
+master_key.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log

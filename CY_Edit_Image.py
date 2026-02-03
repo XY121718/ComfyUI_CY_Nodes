@@ -2,6 +2,7 @@ import base64
 import configparser
 import io
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -21,6 +22,7 @@ REQUEST_TIMEOUT = 600  # 10分钟，等待生图返回
 CATEGORY = "初阳"
 DEFAULT_PROMPT = "a banana"
 CONFIG_PATH = Path(__file__).with_name("config.ini")
+CONFIG_LOCK = threading.Lock()
 CONFIG = configparser.ConfigParser()
 if CONFIG_PATH.exists():
     CONFIG.read(CONFIG_PATH, encoding="utf-8")
@@ -30,6 +32,7 @@ else:
         CONFIG.write(fp)
 
 MASTER_KEY_PATH = Path(__file__).with_name("master_key.ini")
+MASTER_KEY_LOCK = threading.Lock()
 MASTER_KEY_CONFIG = configparser.ConfigParser()
 if MASTER_KEY_PATH.exists():
     MASTER_KEY_CONFIG.read(MASTER_KEY_PATH, encoding="utf-8")
@@ -300,8 +303,7 @@ class CYImageEdit:
     IMAGE_INPUT_NAMES = [f"输入{i}" for i in range(1, 9)]
     IMAGE_LEGACY_NAMES = [f"image_{i}" for i in range(1, 9)]
 
-    def __init__(self):
-        self._cached_outputs = [None] * len(self.RETURN_TYPES)
+    # 不需要 __init__ 方法，ComfyUI 会处理实例化
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -375,7 +377,6 @@ class CYImageEdit:
         prompt = self._get_input_value(inputs, "提示词", "prompt", default=DEFAULT_PROMPT)
         split_mode = bool(self._get_input_value(inputs, "按行拆分提示词", "enable_prompt_split", default=False))
 
-        self._reset_cached_outputs()
 
         relay_default = CONFIG["DEFAULT"].get(RELAY_CONFIG_FIELD, DEFAULT_RELAY_BASE_URL)
         relay_input = self._get_input_value(
@@ -391,12 +392,13 @@ class CYImageEdit:
         if not api_key_clean:
             raise ValueError("Key1 是必填项。")
 
-        # 保存总Key到单独文件
+        # 保存总Key到单独文件（加锁保护）
         master_key_input = self._get_input_value(inputs, "总Key", default="").strip()
         if master_key_input and master_key_input != MASTER_KEY_CONFIG["DEFAULT"].get("master_key", ""):
-            MASTER_KEY_CONFIG["DEFAULT"]["master_key"] = master_key_input
-            with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
-                MASTER_KEY_CONFIG.write(fp)
+            with MASTER_KEY_LOCK:
+                MASTER_KEY_CONFIG["DEFAULT"]["master_key"] = master_key_input
+                with MASTER_KEY_PATH.open("w", encoding="utf-8") as fp:
+                    MASTER_KEY_CONFIG.write(fp)
 
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
@@ -406,8 +408,9 @@ class CYImageEdit:
         )
 
         if cfg_dirty:
-            with CONFIG_PATH.open("w", encoding="utf-8") as fp:
-                CONFIG.write(fp)
+            with CONFIG_LOCK:
+                with CONFIG_PATH.open("w", encoding="utf-8") as fp:
+                    CONFIG.write(fp)
 
         model_value = resolve_display_value(model_select, self.MODEL_MAP, "model")
         aspect_value = resolve_display_value(aspect_ratio, ASPECT_DISPLAY_MAP, "aspect ratio")
@@ -498,9 +501,7 @@ class CYImageEdit:
             output_positions=output_positions,
             seed=seed_value,
         )
-        return self._ensure_port_tuple(
-            edit_result, updated_ports=updated_ports, use_cache_fallback=True, skip_mask=skip_save_mask
-        )
+        return self._format_output(edit_result, updated_ports, skip_save_mask)
 
     def _run_edit(
         self,
@@ -740,12 +741,11 @@ class CYImageEdit:
                 return source[name]
         return default
 
-    def _ensure_port_tuple(self, result, updated_ports=None, use_cache_fallback=True, skip_mask=None):
+    def _format_output(self, result, updated_ports=None, skip_mask=None):
+        """格式化输出为正确的元组格式"""
         skip_flags = skip_mask or [False] * len(self.RETURN_TYPES)
-
-        outputs = list(self._cached_outputs)
+        outputs = [None] * len(self.RETURN_TYPES)
         refreshed_order = list(updated_ports or [])
-        refreshed_set = set(refreshed_order)
 
         def normalize_value(value):
             if isinstance(value, (tuple, list)) and len(value) == 1:
@@ -756,10 +756,8 @@ class CYImageEdit:
 
         def assign_value(port_index: int, value):
             value = normalize_value(value)
-            if value is not None:
+            if value is not None and port_index < len(outputs):
                 outputs[port_index] = value
-            elif not use_cache_fallback and port_index in refreshed_set:
-                outputs[port_index] = None
 
         if isinstance(result, tuple) and len(result) == len(self.RETURN_TYPES):
             for idx, value in enumerate(result):
@@ -777,17 +775,10 @@ class CYImageEdit:
             assign_value(0, result)
 
         for idx, skip in enumerate(skip_flags):
-            if skip:
+            if skip and idx < len(outputs):
                 outputs[idx] = None
 
-        self._cached_outputs = outputs
         return tuple(outputs)
-
-    def _reset_cached_outputs(self):
-        self._cached_outputs = [None] * len(self.RETURN_TYPES)
-
-    def _has_cached_outputs(self):
-        return any(entry is not None for entry in self._cached_outputs)
 
 
 NODE_CLASS_MAPPINGS = {"CYImageEdit": CYImageEdit}
