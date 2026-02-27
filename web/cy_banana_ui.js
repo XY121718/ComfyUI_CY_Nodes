@@ -316,6 +316,42 @@ app.registerExtension({
                     }
                 }
             }
+
+            // 修复宽高比选择器的值更新问题
+            const aspectWidget = node.widgets?.find(w => w.name === "默认宽高比");
+            if (aspectWidget && !aspectWidget.__cyAspectFixed) {
+                aspectWidget.__cyAspectFixed = true;
+                const oldCallback = aspectWidget.callback;
+                aspectWidget.callback = function (value) {
+                    // 强制更新 widget 的值
+                    this.value = value;
+                    // 触发节点重新序列化
+                    if (node.graph) {
+                        node.setDirtyCanvas(true, true);
+                    }
+                    if (oldCallback) {
+                        return oldCallback.apply(this, arguments);
+                    }
+                };
+            }
+
+            // 同样修复图像尺寸选择器
+            const sizeWidget = node.widgets?.find(w => w.name === "图像尺寸");
+            if (sizeWidget && !sizeWidget.__cySizeFixed) {
+                sizeWidget.__cySizeFixed = true;
+                const oldCallback = sizeWidget.callback;
+                sizeWidget.callback = function (value) {
+                    // 强制更新 widget 的值
+                    this.value = value;
+                    // 触发节点重新序列化
+                    if (node.graph) {
+                        node.setDirtyCanvas(true, true);
+                    }
+                    if (oldCallback) {
+                        return oldCallback.apply(this, arguments);
+                    }
+                };
+            }
         }, 100);
     }
 });

@@ -199,23 +199,29 @@ def download_process(response_json):
     entries = extract_image_entries(response_json)
 
     if entries:
-        for item in entries:
+        for idx, item in enumerate(entries):
+            url_value = item.get("url", "")
+            
             # 优先尝试 URL（更可靠）
-            if "url" in item and item["url"]:
+            if url_value:
                 try:
-                    img = download_image_with_retry(item["url"])
+                    img = download_image_with_retry(url_value)
+                    image_objects.append(img)
+                    continue  # 成功后跳过 Base64
+                except Exception as e:
+                    print(f"[WARN] URL 下载失败，尝试 Base64: {e}")
+            
+            # URL 为空或下载失败，尝试 b64_json
+            if "b64_json" in item and item["b64_json"]:
+                try:
+                    b64_data = item["b64_json"]
+                    img = Image.open(io.BytesIO(base64.b64decode(b64_data))).convert("RGB")
                     image_objects.append(img)
                 except Exception as e:
-                    print(f"[WARN] 图片下载失败: {e}")
-            # 然后尝试 b64_json
-            elif "b64_json" in item and item["b64_json"]:
-                try:
-                    img = Image.open(io.BytesIO(base64.b64decode(item["b64_json"]))).convert("RGB")
-                    image_objects.append(img)
-                except Exception as e:
-                    print(f"[WARN] Base64 图片解码失败: {e}")
-            else:
-                print(f"[WARN] 未知的图片格式，字段: {list(item.keys())}")
+                    # URL 为空且 Base64 解码失败是 API 服务器问题
+                    print(f"[WARN] API 返回数据异常: URL 为空，Base64 解码失败")
+            elif not url_value:
+                print(f"[WARN] API 返回数据异常: URL 和 Base64 都为空")
     elif "choices" in response_json:
         content = response_json["choices"][0]["message"]["content"]
 
@@ -399,7 +405,6 @@ class CYTextToImage:
         model_value = self.MODEL_MAP.get(model_select, model_select)
         aspect_value = resolve_display_value(aspect_ratio, ASPECT_DISPLAY_MAP, "aspect ratio")
         image_size_value = resolve_display_value(image_size, IMAGE_SIZE_DISPLAY_MAP, "image size")
-        resolved_size = resolve_image_size(image_size_value, aspect_value) if image_size_value != "Auto" else None
         
         # 处理提示词：如果开启拆分则拆分，否则使用原始提示词
         if split_mode:
@@ -410,7 +415,9 @@ class CYTextToImage:
             print(f"[CY文生图] 批量提示词模式: 拆分为 {len(dispatch_prompts)} 段")
         else:
             # 并发模式：使用相同的提示词发起多个请求
-            # 注意：提示词中的换行符会被保留，不会被拆分
+            # 检查提示词是否包含分隔符，提醒用户可能想使用批量模式
+            if re.search(r"(?:\r?\n){2,}", prompt):
+                print(f"[WARN] 提示词包含换行符分隔，如需分别生成请开启'批量提示词'模式")
             dispatch_prompts = [prompt] * concurrency_value
             print(f"[CY文生图] 并发生成: {concurrency_value} 张")
 
@@ -427,8 +434,6 @@ class CYTextToImage:
             dispatch_prompts,
             aspect_value,
             image_size_value,
-            resolved_size,
-            1,
             channel_configs,
             relay_clean,
             seed=seed_value,
@@ -453,8 +458,6 @@ class CYTextToImage:
         prompts: List[str],
         aspect_value: str,
         image_size_value: str,
-        resolved_size: Optional[str],
-        count: int,
         channel_configs: List[dict],
         relay_base_url: str,
         seed: int = 0,
@@ -484,23 +487,17 @@ class CYTextToImage:
                 }
             else:
                 # Images generations 接口格式
+                # 按照官方API示例，只需要这几个参数
                 payload = {
                     "model": model_value,
                     "prompt": prompt_value,
                     "aspect_ratio": aspect_for_call,
+                    "image_size": image_size_value.lower(),  # 官方示例用小写 "1k"
                     "response_format": "url",
-                    "n": count,
                 }
-                if image_size_value != "Auto":
-                    payload["image_size"] = image_size_value
-                    if resolved_size:
-                        payload["size"] = resolved_size
 
-            # 精简日志：只显示关键信息
-            prompt_preview = prompt_value[:20] + "..." if len(prompt_value) > 20 else prompt_value
-            # 显示提示词中的换行符（用于调试）
-            prompt_debug = repr(prompt_value[:50])
-            print(f"[CY文生图] 请求: model={model_value}, prompt={prompt_debug}, n={payload.get('n', 'N/A')}, seed={seed}")
+            # 精简日志
+            print(f"[CY文生图] 请求: model={model_value}, aspect_ratio={payload.get('aspect_ratio')}, image_size={payload.get('image_size')}")
             
             res = make_request("post", endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
             res_json = res.json()
@@ -558,24 +555,34 @@ class CYTextToImage:
         tasks = []
         for idx, (config, prompt) in enumerate(zip(channel_configs, prompts)):
             extra = extras[idx] if extras else None
-            tasks.append((config, prompt, extra))
+            tasks.append((idx, config, prompt, extra))  # 添加 idx 用于计算延迟
 
         results = [None] * len(tasks)
 
         failures = []
+        
+        # 包装函数，添加交错延迟
+        import time
+        def call_with_delay(task_tuple):
+            idx, config, prompt, extra = task_tuple
+            # 交错延迟：每个任务间隔 0.5 秒，避免同时发起请求
+            if idx > 0:
+                delay = min(idx * 0.5, 2.0)  # 最多延迟 2 秒
+                time.sleep(delay)
+            return idx, func(config, prompt, extra)
+        
+        # 并发执行请求，但有交错延迟
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            futures = {
-                executor.submit(func, config, prompt, extra): idx for idx, (config, prompt, extra) in enumerate(tasks)
-            }
+            futures = {executor.submit(call_with_delay, task): task[0] for task in tasks}
             for future in as_completed(futures):
-                idx = futures[future]
                 try:
-                    result = future.result()
+                    idx, result = future.result()
                     # 如果 API 返回 None（没有生成图片），记录但不报错
                     if result is None:
                         print(f"[WARN] API request #{idx + 1} 未返回图片，将跳过")
                     results[idx] = result
                 except Exception as exc:  # noqa: BLE001
+                    idx = futures[future]
                     failures.append({"idx": idx, "exc": exc})
                     print(f"[WARN] API request #{idx + 1} failed: {exc}")
 
