@@ -82,6 +82,7 @@ IMAGE_SIZE_MAP = {
 
 DEFAULT_MODEL_MAP = {
     "gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image-preview",
     "nano-banana": "nano-banana",
     "nano-banana-2": "nano-banana-2",
     "nano-banana-2-2k": "nano-banana-2-2k",

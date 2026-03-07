@@ -1,6 +1,0 @@
-[DEFAULT]
-# 填入你的 API Key
-api_key = 
-
-# 中转网址（可选）
-relay_base_url = https://api.xheai.cc
