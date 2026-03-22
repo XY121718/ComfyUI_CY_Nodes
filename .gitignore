@@ -7,6 +7,7 @@ __pycache__
 # 配置文件（包含 API Key，不要提交）
 config.ini
 master_key.ini
+.update_meta.json
 
 # IDE
 .idea/
@@ -19,4 +20,3 @@ Thumbs.db
 
 # 日志
 *.log
-BUG_FIX_LOG.md

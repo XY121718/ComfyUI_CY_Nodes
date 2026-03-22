@@ -5,20 +5,20 @@
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom_Nodes-blue)
 ![Version](https://img.shields.io/badge/version-1.0.1-green)
 
-## 更新日志
+## 最近更新
 
-### 2026-03-22
+### 2026-03-22 | v1.0.1
 
-- 重写 README，修复原文档乱码和过时描述。
-- 补充当前插件的实际功能、输入输出、参数限制和工作流示例。
-- 修正文生图与图生图的真实请求行为说明。
-- 新增图生图兼容性说明：`api.xheai.cc` 当前实测可用的是 `JSON + base64 image` 请求，而不是文档中标注的 `multipart/form-data`。
-- 明确“按行拆分提示词”模式下的输入图与输出口对应关系。
-- 补充自动创建令牌按钮、配置文件和常见错误的说明。
-- 新增 `CY文生图`、`CY图片编辑` 的节点顶部“使用教程”入口与站内教程弹窗。
-- 教程弹窗新增 `检查更新`、`直达星核AI` 操作按钮，节点右上角新增 `在线生图` 跳转入口。
-- 更新弹窗改为显示插件版本号、当前提交和最新提交，避免把提交哈希误当成版本号。
-- 使用 ComfyUI 嵌入 Python 对 `CY文生图` 与 `CY图片编辑` 做了真实接口测试，`api.xheai.cc + nano-banana-2 + 4:3 + 1K` 可正常返回图片。
+- 新增节点顶部 `使用教程` 入口与站内教程弹窗
+- 新增 `检查更新`、`直达星核AI`、`在线生图` 相关入口
+- 修复图生图在 `api.xheai.cc` 下的请求格式兼容问题
+- 修复顶部按钮遮挡和更新弹窗版本显示不正确的问题
+- 已实测 `CY文生图` 与 `CY图片编辑` 可以正常返回图片
+
+完整历史请查看：
+
+- [CHANGELOG.md](E:/CY_AI/CY_ComfyUI%20cjks/ComfyUI/custom_nodes/ComfyUI_CY_Nodes/CHANGELOG.md)
+- [BUG_FIX_LOG.md](E:/CY_AI/CY_ComfyUI%20cjks/ComfyUI/custom_nodes/ComfyUI_CY_Nodes/BUG_FIX_LOG.md)
 
 ---
 
