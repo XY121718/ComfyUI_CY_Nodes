@@ -3,7 +3,7 @@
 基于 Gemini / Nano Banana 系列接口的 ComfyUI 自定义节点，提供文生图、图生图编辑和可选保存三个节点。
 
 ![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom_Nodes-blue)
-![Version](https://img.shields.io/badge/version-1.0.0-green)
+![Version](https://img.shields.io/badge/version-1.0.1-green)
 
 ## 更新日志
 

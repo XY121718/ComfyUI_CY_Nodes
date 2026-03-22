@@ -8,6 +8,8 @@ const LINK_BUTTON_TEXT = "直达星核AI";
 const LINK_BUTTON_URL = "https://api.xheai.cc";
 const TUTORIAL_BUTTON_TEXT = "📘 使用教程";
 const TOKEN_API_PATH = "/api/open/token";
+const UPDATE_STATUS_API_PATH = "/cy_nodes/updater/status";
+const UPDATE_APPLY_API_PATH = "/cy_nodes/updater/update";
 const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc"];
 const RELAY_MODEL_BLACKLIST = {
     "https://api.xheai.cc": ["nano-banana-2-2k", "nano-banana-2-4k"],
@@ -287,6 +289,110 @@ function showMessage(message, isSuccess = true) {
     okButton.focus();
 }
 
+function showActionDialog(title, message, confirmText, onConfirm) {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "background:rgba(15,23,42,0.42)",
+        "z-index:100000",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+        "padding:24px",
+    ].join(";");
+
+    const modal = document.createElement("div");
+    modal.style.cssText = [
+        "background:#ffffff",
+        "border-radius:16px",
+        "padding:24px",
+        "width:min(460px, 92vw)",
+        "box-shadow:0 18px 60px rgba(15,23,42,0.22)",
+        "border:1px solid rgba(226,232,240,1)",
+        "color:#111827",
+    ].join(";");
+
+    const heading = document.createElement("div");
+    heading.textContent = title;
+    heading.style.cssText = "font-size:22px;font-weight:800;line-height:1.4;margin-bottom:12px;";
+    modal.appendChild(heading);
+
+    const text = document.createElement("div");
+    text.textContent = message;
+    text.style.cssText = "font-size:16px;line-height:1.8;color:#334155;margin-bottom:20px;white-space:pre-wrap;";
+    modal.appendChild(text);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.textContent = "取消";
+    cancelButton.style.cssText = "padding:10px 16px;border-radius:12px;border:1px solid rgba(203,213,225,1);background:#fff;color:#334155;cursor:pointer;";
+    cancelButton.onclick = () => document.body.removeChild(overlay);
+    actions.appendChild(cancelButton);
+
+    const confirmButton = document.createElement("button");
+    confirmButton.textContent = confirmText;
+    confirmButton.style.cssText = "padding:10px 16px;border-radius:12px;border:none;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;cursor:pointer;font-weight:700;";
+    confirmButton.onclick = async () => {
+        confirmButton.disabled = true;
+        confirmButton.style.opacity = "0.6";
+        try {
+            await onConfirm();
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+        } catch (_error) {
+            confirmButton.disabled = false;
+            confirmButton.style.opacity = "1";
+        }
+    };
+    actions.appendChild(confirmButton);
+
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    overlay.onclick = (event) => {
+        if (event.target === overlay) {
+            document.body.removeChild(overlay);
+        }
+    };
+    document.body.appendChild(overlay);
+}
+
+function formatCommitHash(value) {
+    if (!value) return "未知";
+    return value.slice(0, 7);
+}
+
+async function checkAndApplyUpdate() {
+    const statusResponse = await fetch(UPDATE_STATUS_API_PATH, { method: "GET" });
+    const statusResult = await statusResponse.json();
+    if (!statusResponse.ok || !statusResult.success) {
+        throw new Error(statusResult.message || "检查更新失败");
+    }
+
+    if (statusResult.update_available === false) {
+        showMessage("当前已经是最新版本。", true);
+        return;
+    }
+
+    const localVersion = formatCommitHash(statusResult.local_commit);
+    const remoteVersion = formatCommitHash(statusResult.remote_commit);
+    const promptMessage = statusResult.update_available === true
+        ? `检测到新版本。\n当前版本：${localVersion}\n最新版本：${remoteVersion}\n\n点击“立即更新”后会自动下载并覆盖插件文件，config.ini、master_key.ini 等本地配置会保留。`
+        : "无法准确判断本地版本，但可以直接从 GitHub 下载最新插件覆盖当前目录。\n\nconfig.ini、master_key.ini 等本地配置会保留。";
+
+    showActionDialog("检查到可更新内容", promptMessage, "立即更新", async () => {
+        const updateResponse = await fetch(UPDATE_APPLY_API_PATH, { method: "POST" });
+        const updateResult = await updateResponse.json();
+        if (!updateResponse.ok || !updateResult.success) {
+            throw new Error(updateResult.message || "更新失败");
+        }
+        showMessage(updateResult.message || "插件更新完成，请重载或重启 ComfyUI。", true);
+    });
+}
+
 function createTutorialSection(title, items, background, accent) {
     if (!Array.isArray(items) || !items.length) {
         return null;
@@ -332,7 +438,7 @@ function showTutorialModal(nodeType) {
     overlay.style.cssText = [
         "position:fixed",
         "inset:0",
-        "background:rgba(8,12,20,0.76)",
+        "background:rgba(15,23,42,0.38)",
         "backdrop-filter:blur(4px)",
         "z-index:99999",
         "display:flex",
@@ -347,43 +453,86 @@ function showTutorialModal(nodeType) {
         "max-height:88vh",
         "overflow:hidden",
         "border-radius:22px",
-        "background:#0f1724",
-        "border:1px solid rgba(148,163,184,0.14)",
-        "box-shadow:0 24px 80px rgba(0,0,0,0.45)",
+        "background:#ffffff",
+        "border:1px solid rgba(203,213,225,0.95)",
+        "box-shadow:0 24px 80px rgba(15,23,42,0.22)",
         "display:flex",
         "flex-direction:column",
-        "color:#fff",
+        "color:#111827",
     ].join(";");
 
     const header = document.createElement("div");
     header.style.cssText = [
         "padding:24px 28px 20px",
-        "border-bottom:1px solid rgba(148,163,184,0.14)",
-        "background:linear-gradient(180deg, rgba(30,41,59,0.96), rgba(17,24,39,0.96))",
+        "border-bottom:1px solid rgba(226,232,240,1)",
+        "background:linear-gradient(180deg, #f8fbff, #f1f6fd)",
     ].join(";");
+
+    const headerTop = document.createElement("div");
+    headerTop.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;";
+
+    const headerInfo = document.createElement("div");
+    headerInfo.style.cssText = "min-width:0;flex:1 1 420px;";
+
+    const headerActions = document.createElement("div");
+    headerActions.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;";
+
+    const updateButton = document.createElement("button");
+    updateButton.type = "button";
+    updateButton.textContent = "检查更新";
+    updateButton.style.cssText = [
+        "padding:9px 14px",
+        "border-radius:12px",
+        "border:1px solid rgba(191,219,254,1)",
+        "background:#ffffff",
+        "color:#2563eb",
+        "font-size:14px",
+        "font-weight:700",
+        "cursor:pointer",
+    ].join(";");
+    updateButton.onclick = async () => {
+        const originalText = updateButton.textContent;
+        updateButton.disabled = true;
+        updateButton.textContent = "检查中...";
+        updateButton.style.opacity = "0.65";
+        try {
+            await checkAndApplyUpdate();
+        } catch (error) {
+            showMessage(`检查更新失败: ${error.message}`, false);
+        } finally {
+            updateButton.disabled = false;
+            updateButton.textContent = originalText;
+            updateButton.style.opacity = "1";
+        }
+    };
+    headerActions.appendChild(updateButton);
 
     const tag = document.createElement("div");
     tag.textContent = "✨ 节点步骤教程";
-    tag.style.cssText = "font-size:12px;font-weight:700;color:#93c5fd;letter-spacing:0.06em;margin-bottom:10px;";
-    header.appendChild(tag);
+    tag.style.cssText = "font-size:12px;font-weight:700;color:#2563eb;letter-spacing:0.06em;margin-bottom:10px;";
+    headerInfo.appendChild(tag);
 
     const title = document.createElement("div");
     title.textContent = tutorial.title;
-    title.style.cssText = "font-size:30px;font-weight:800;line-height:1.2;margin-bottom:8px;";
-    header.appendChild(title);
+    title.style.cssText = "font-size:30px;font-weight:800;line-height:1.2;margin-bottom:8px;color:#111827;";
+    headerInfo.appendChild(title);
 
     const subtitle = document.createElement("div");
     subtitle.textContent = tutorial.subtitle;
-    subtitle.style.cssText = "font-size:17px;color:#cbd5e1;line-height:1.75;";
-    header.appendChild(subtitle);
+    subtitle.style.cssText = "font-size:17px;color:#334155;line-height:1.75;";
+    headerInfo.appendChild(subtitle);
+
+    headerTop.appendChild(headerInfo);
+    headerTop.appendChild(headerActions);
+    header.appendChild(headerTop);
 
     const contentWrap = document.createElement("div");
-    contentWrap.style.cssText = "flex:1;overflow:auto;padding:24px 28px 28px;background:#111827;";
+    contentWrap.style.cssText = "flex:1;overflow:auto;padding:24px 28px 28px;background:#ffffff;";
 
     const footer = document.createElement("div");
     footer.style.cssText = [
         "padding:16px 28px 24px",
-        "border-top:1px solid rgba(148,163,184,0.12)",
+        "border-top:1px solid rgba(226,232,240,1)",
         "display:flex",
         "justify-content:space-between",
         "align-items:center",
@@ -392,7 +541,7 @@ function showTutorialModal(nodeType) {
     ].join(";");
 
     const status = document.createElement("div");
-    status.style.cssText = "font-size:13px;color:#94a3b8;";
+    status.style.cssText = "font-size:13px;color:#64748b;";
     footer.appendChild(status);
 
     const actions = document.createElement("div");
@@ -404,9 +553,9 @@ function showTutorialModal(nodeType) {
     prevButton.style.cssText = [
         "padding:10px 16px",
         "border-radius:12px",
-        "border:1px solid rgba(148,163,184,0.18)",
-        "background:#1e293b",
-        "color:#e2e8f0",
+        "border:1px solid rgba(203,213,225,1)",
+        "background:#f8fafc",
+        "color:#334155",
         "cursor:pointer",
     ].join(";");
 
@@ -429,9 +578,9 @@ function showTutorialModal(nodeType) {
     closeButton.style.cssText = [
         "padding:10px 18px",
         "border-radius:12px",
-        "border:1px solid rgba(148,163,184,0.18)",
-        "background:rgba(15,23,42,0.92)",
-        "color:#f8fafc",
+        "border:1px solid rgba(203,213,225,1)",
+        "background:#ffffff",
+        "color:#0f172a",
         "cursor:pointer",
     ].join(";");
 
@@ -476,8 +625,8 @@ function showTutorialModal(nodeType) {
 
         const introCard = document.createElement("div");
         introCard.style.cssText = [
-            "background:#172033",
-            "border:1px solid rgba(96,165,250,0.18)",
+            "background:#f8fbff",
+            "border:1px solid rgba(191,219,254,1)",
             "border-radius:16px",
             "padding:18px 20px",
             "margin-bottom:20px",
@@ -485,18 +634,18 @@ function showTutorialModal(nodeType) {
 
         const introTitle = document.createElement("div");
         introTitle.textContent = "🌟 先看这段，能更快上手";
-        introTitle.style.cssText = "font-size:19px;font-weight:800;color:#eaf2ff;margin-bottom:10px;";
+        introTitle.style.cssText = "font-size:19px;font-weight:800;color:#0f172a;margin-bottom:10px;";
         introCard.appendChild(introTitle);
 
         const introText = document.createElement("div");
         introText.textContent = tutorial.intro || "";
-        introText.style.cssText = "font-size:17px;line-height:1.85;color:#cbd5e1;";
+        introText.style.cssText = "font-size:17px;line-height:1.85;color:#334155;";
         introCard.appendChild(introText);
         contentWrap.appendChild(introCard);
 
         const listTitle = document.createElement("div");
         listTitle.textContent = "📚 教程目录";
-        listTitle.style.cssText = "font-size:22px;font-weight:800;margin-bottom:14px;color:#ffffff;";
+        listTitle.style.cssText = "font-size:22px;font-weight:800;margin-bottom:14px;color:#111827;";
         contentWrap.appendChild(listTitle);
 
         tutorial.steps.forEach((step, index) => {
@@ -505,8 +654,8 @@ function showTutorialModal(nodeType) {
             item.style.cssText = [
                 "width:100%",
                 "text-align:left",
-                "background:#182132",
-                "border:1px solid rgba(148,163,184,0.12)",
+                "background:#ffffff",
+                "border:1px solid rgba(226,232,240,1)",
                 "border-radius:14px",
                 "padding:16px 18px",
                 "margin-bottom:10px",
@@ -514,12 +663,12 @@ function showTutorialModal(nodeType) {
                 "transition:border-color 0.15s ease, background 0.15s ease",
             ].join(";");
             item.onmouseover = () => {
-                item.style.borderColor = "rgba(96,165,250,0.5)";
-                item.style.background = "#1c2740";
+                item.style.borderColor = "rgba(96,165,250,0.75)";
+                item.style.background = "#f8fbff";
             };
             item.onmouseout = () => {
-                item.style.borderColor = "rgba(148,163,184,0.12)";
-                item.style.background = "#182132";
+                item.style.borderColor = "rgba(226,232,240,1)";
+                item.style.background = "#ffffff";
             };
             item.onclick = () => {
                 renderStep(index);
@@ -534,26 +683,26 @@ function showTutorialModal(nodeType) {
 
             const stepNo = document.createElement("div");
             stepNo.textContent = String(index + 1).padStart(2, "0");
-            stepNo.style.cssText = "font-size:13px;font-weight:800;color:#93c5fd;background:rgba(37,99,235,0.18);border-radius:999px;padding:6px 9px;flex:0 0 auto;";
+            stepNo.style.cssText = "font-size:13px;font-weight:800;color:#2563eb;background:#eff6ff;border-radius:999px;padding:6px 9px;flex:0 0 auto;";
             headingWrap.appendChild(stepNo);
 
             const heading = document.createElement("div");
             heading.textContent = `${step.emoji} ${step.title}`;
-            heading.style.cssText = "font-size:21px;font-weight:800;color:#f8fafc;line-height:1.5;";
+            heading.style.cssText = "font-size:21px;font-weight:800;color:#111827;line-height:1.5;";
             headingWrap.appendChild(heading);
 
             topRow.appendChild(headingWrap);
 
             const badge = document.createElement("div");
             badge.textContent = "点击查看";
-            badge.style.cssText = "font-size:14px;color:#93c5fd;background:rgba(37,99,235,0.12);padding:7px 12px;border-radius:999px;white-space:nowrap;";
+            badge.style.cssText = "font-size:14px;color:#2563eb;background:#eff6ff;padding:7px 12px;border-radius:999px;white-space:nowrap;";
             topRow.appendChild(badge);
 
             item.appendChild(topRow);
 
             const summary = document.createElement("div");
             summary.textContent = step.summary;
-            summary.style.cssText = "font-size:17px;line-height:1.8;color:#aebfd4;padding-left:42px;";
+            summary.style.cssText = "font-size:17px;line-height:1.8;color:#475569;padding-left:42px;";
             item.appendChild(summary);
 
             contentWrap.appendChild(item);
@@ -576,7 +725,7 @@ function showTutorialModal(nodeType) {
 
         const crumb = document.createElement("div");
         crumb.textContent = `${step.emoji} 第 ${index + 1} 步 / 共 ${tutorial.steps.length} 步`;
-        crumb.style.cssText = "font-size:16px;font-weight:700;color:#93c5fd;";
+        crumb.style.cssText = "font-size:16px;font-weight:700;color:#2563eb;";
         topBar.appendChild(crumb);
 
         const backButton = document.createElement("button");
@@ -585,9 +734,9 @@ function showTutorialModal(nodeType) {
         backButton.style.cssText = [
             "padding:8px 14px",
             "border-radius:999px",
-            "border:1px solid rgba(148,163,184,0.18)",
-            "background:rgba(30,41,59,0.9)",
-            "color:#e2e8f0",
+            "border:1px solid rgba(203,213,225,1)",
+            "background:#f8fafc",
+            "color:#334155",
             "cursor:pointer",
             "font-size:15px",
         ].join(";");
@@ -600,8 +749,8 @@ function showTutorialModal(nodeType) {
 
         const hero = document.createElement("div");
         hero.style.cssText = [
-            "background:#172033",
-            "border:1px solid rgba(96,165,250,0.16)",
+            "background:#f8fbff",
+            "border:1px solid rgba(191,219,254,1)",
             "border-radius:18px",
             "padding:20px 20px 16px",
             "margin-bottom:18px",
@@ -609,19 +758,19 @@ function showTutorialModal(nodeType) {
 
         const heroTitle = document.createElement("div");
         heroTitle.textContent = `${step.emoji} ${step.title}`;
-        heroTitle.style.cssText = "font-size:28px;font-weight:800;line-height:1.3;margin-bottom:12px;color:#ffffff;";
+        heroTitle.style.cssText = "font-size:28px;font-weight:800;line-height:1.3;margin-bottom:12px;color:#111827;";
         hero.appendChild(heroTitle);
 
         const heroSummary = document.createElement("div");
         heroSummary.textContent = step.summary;
-        heroSummary.style.cssText = "font-size:18px;line-height:1.85;color:#cbd5e1;";
+        heroSummary.style.cssText = "font-size:18px;line-height:1.85;color:#334155;";
         hero.appendChild(heroSummary);
         contentWrap.appendChild(hero);
 
         const article = document.createElement("div");
         article.style.cssText = [
-            "background:#111827",
-            "border:1px solid rgba(148,163,184,0.12)",
+            "background:#ffffff",
+            "border:1px solid rgba(226,232,240,1)",
             "border-radius:16px",
             "padding:18px 18px 6px",
             "margin-bottom:14px",
@@ -629,7 +778,7 @@ function showTutorialModal(nodeType) {
 
         const articleTitle = document.createElement("div");
         articleTitle.textContent = "正文说明";
-        articleTitle.style.cssText = "font-size:17px;font-weight:800;color:#93c5fd;margin-bottom:14px;";
+        articleTitle.style.cssText = "font-size:17px;font-weight:800;color:#2563eb;margin-bottom:14px;";
         article.appendChild(articleTitle);
 
         (step.content || []).forEach((paragraph, paragraphIndex) => {
@@ -638,12 +787,12 @@ function showTutorialModal(nodeType) {
 
             const marker = document.createElement("div");
             marker.textContent = `${paragraphIndex + 1}`;
-            marker.style.cssText = "width:26px;height:26px;line-height:26px;text-align:center;border-radius:999px;background:rgba(37,99,235,0.16);color:#93c5fd;font-size:14px;font-weight:800;flex:0 0 auto;margin-top:2px;";
+            marker.style.cssText = "width:26px;height:26px;line-height:26px;text-align:center;border-radius:999px;background:#eff6ff;color:#2563eb;font-size:14px;font-weight:800;flex:0 0 auto;margin-top:2px;";
             row.appendChild(marker);
 
             const text = document.createElement("div");
             text.textContent = paragraph;
-            text.style.cssText = "font-size:18px;line-height:1.9;color:#e5edf7;";
+            text.style.cssText = "font-size:18px;line-height:1.9;color:#111827;";
             row.appendChild(text);
 
             article.appendChild(row);
