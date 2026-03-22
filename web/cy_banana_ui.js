@@ -343,12 +343,12 @@ function showTutorialModal(nodeType) {
 
     const modal = document.createElement("div");
     modal.style.cssText = [
-        "width:min(920px, 92vw)",
+        "width:min(860px, 92vw)",
         "max-height:88vh",
         "overflow:hidden",
-        "border-radius:24px",
-        "background:linear-gradient(180deg, #131a26 0%, #0f1520 100%)",
-        "border:1px solid rgba(148,163,184,0.18)",
+        "border-radius:22px",
+        "background:#0f1724",
+        "border:1px solid rgba(148,163,184,0.14)",
         "box-shadow:0 24px 80px rgba(0,0,0,0.45)",
         "display:flex",
         "flex-direction:column",
@@ -357,28 +357,28 @@ function showTutorialModal(nodeType) {
 
     const header = document.createElement("div");
     header.style.cssText = [
-        "padding:24px 28px 18px",
+        "padding:24px 28px 20px",
         "border-bottom:1px solid rgba(148,163,184,0.14)",
-        "background:linear-gradient(135deg, rgba(74,158,255,0.18), rgba(16,185,129,0.08))",
+        "background:linear-gradient(180deg, rgba(30,41,59,0.96), rgba(17,24,39,0.96))",
     ].join(";");
 
     const tag = document.createElement("div");
     tag.textContent = "✨ 节点步骤教程";
-    tag.style.cssText = "font-size:12px;font-weight:700;color:#93c5fd;letter-spacing:0.08em;margin-bottom:10px;";
+    tag.style.cssText = "font-size:12px;font-weight:700;color:#93c5fd;letter-spacing:0.06em;margin-bottom:10px;";
     header.appendChild(tag);
 
     const title = document.createElement("div");
     title.textContent = tutorial.title;
-    title.style.cssText = "font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px;";
+    title.style.cssText = "font-size:30px;font-weight:800;line-height:1.2;margin-bottom:8px;";
     header.appendChild(title);
 
     const subtitle = document.createElement("div");
     subtitle.textContent = tutorial.subtitle;
-    subtitle.style.cssText = "font-size:15px;color:#dbe7ff;line-height:1.7;";
+    subtitle.style.cssText = "font-size:17px;color:#cbd5e1;line-height:1.75;";
     header.appendChild(subtitle);
 
     const contentWrap = document.createElement("div");
-    contentWrap.style.cssText = "flex:1;overflow:auto;padding:24px 28px 28px;";
+    contentWrap.style.cssText = "flex:1;overflow:auto;padding:24px 28px 28px;background:#111827;";
 
     const footer = document.createElement("div");
     footer.style.cssText = [
@@ -476,27 +476,27 @@ function showTutorialModal(nodeType) {
 
         const introCard = document.createElement("div");
         introCard.style.cssText = [
-            "background:rgba(59,130,246,0.10)",
-            "border:1px solid rgba(96,165,250,0.22)",
-            "border-radius:18px",
+            "background:#172033",
+            "border:1px solid rgba(96,165,250,0.18)",
+            "border-radius:16px",
             "padding:18px 20px",
-            "margin-bottom:18px",
+            "margin-bottom:20px",
         ].join(";");
 
         const introTitle = document.createElement("div");
         introTitle.textContent = "🌟 先看这段，能更快上手";
-        introTitle.style.cssText = "font-size:16px;font-weight:700;color:#bfdbfe;margin-bottom:10px;";
+        introTitle.style.cssText = "font-size:19px;font-weight:800;color:#eaf2ff;margin-bottom:10px;";
         introCard.appendChild(introTitle);
 
         const introText = document.createElement("div");
         introText.textContent = tutorial.intro || "";
-        introText.style.cssText = "font-size:14px;line-height:1.8;color:#eef4ff;";
+        introText.style.cssText = "font-size:17px;line-height:1.85;color:#cbd5e1;";
         introCard.appendChild(introText);
         contentWrap.appendChild(introCard);
 
         const listTitle = document.createElement("div");
         listTitle.textContent = "📚 教程目录";
-        listTitle.style.cssText = "font-size:18px;font-weight:800;margin-bottom:14px;color:#ffffff;";
+        listTitle.style.cssText = "font-size:22px;font-weight:800;margin-bottom:14px;color:#ffffff;";
         contentWrap.appendChild(listTitle);
 
         tutorial.steps.forEach((step, index) => {
@@ -505,24 +505,21 @@ function showTutorialModal(nodeType) {
             item.style.cssText = [
                 "width:100%",
                 "text-align:left",
-                "background:linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96))",
-                "border:1px solid rgba(148,163,184,0.18)",
-                "border-radius:18px",
-                "padding:18px",
-                "margin-bottom:12px",
+                "background:#182132",
+                "border:1px solid rgba(148,163,184,0.12)",
+                "border-radius:14px",
+                "padding:16px 18px",
+                "margin-bottom:10px",
                 "cursor:pointer",
-                "transition:transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
-                "box-shadow:0 10px 24px rgba(0,0,0,0.18)",
+                "transition:border-color 0.15s ease, background 0.15s ease",
             ].join(";");
             item.onmouseover = () => {
-                item.style.transform = "translateY(-1px)";
                 item.style.borderColor = "rgba(96,165,250,0.5)";
-                item.style.boxShadow = "0 12px 30px rgba(59,130,246,0.16)";
+                item.style.background = "#1c2740";
             };
             item.onmouseout = () => {
-                item.style.transform = "translateY(0)";
-                item.style.borderColor = "rgba(148,163,184,0.18)";
-                item.style.boxShadow = "0 10px 24px rgba(0,0,0,0.18)";
+                item.style.borderColor = "rgba(148,163,184,0.12)";
+                item.style.background = "#182132";
             };
             item.onclick = () => {
                 renderStep(index);
@@ -530,23 +527,33 @@ function showTutorialModal(nodeType) {
             };
 
             const topRow = document.createElement("div");
-            topRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px;flex-wrap:wrap;";
+            topRow.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:8px;flex-wrap:wrap;";
+
+            const headingWrap = document.createElement("div");
+            headingWrap.style.cssText = "display:flex;align-items:center;gap:10px;min-width:0;";
+
+            const stepNo = document.createElement("div");
+            stepNo.textContent = String(index + 1).padStart(2, "0");
+            stepNo.style.cssText = "font-size:13px;font-weight:800;color:#93c5fd;background:rgba(37,99,235,0.18);border-radius:999px;padding:6px 9px;flex:0 0 auto;";
+            headingWrap.appendChild(stepNo);
 
             const heading = document.createElement("div");
-            heading.textContent = `${step.emoji} 第 ${index + 1} 步 · ${step.title}`;
-            heading.style.cssText = "font-size:16px;font-weight:800;color:#f8fafc;";
-            topRow.appendChild(heading);
+            heading.textContent = `${step.emoji} ${step.title}`;
+            heading.style.cssText = "font-size:21px;font-weight:800;color:#f8fafc;line-height:1.5;";
+            headingWrap.appendChild(heading);
+
+            topRow.appendChild(headingWrap);
 
             const badge = document.createElement("div");
             badge.textContent = "点击查看";
-            badge.style.cssText = "font-size:12px;color:#93c5fd;background:rgba(37,99,235,0.16);padding:6px 10px;border-radius:999px;white-space:nowrap;";
+            badge.style.cssText = "font-size:14px;color:#93c5fd;background:rgba(37,99,235,0.12);padding:7px 12px;border-radius:999px;white-space:nowrap;";
             topRow.appendChild(badge);
 
             item.appendChild(topRow);
 
             const summary = document.createElement("div");
             summary.textContent = step.summary;
-            summary.style.cssText = "font-size:14px;line-height:1.75;color:#cbd5e1;";
+            summary.style.cssText = "font-size:17px;line-height:1.8;color:#aebfd4;padding-left:42px;";
             item.appendChild(summary);
 
             contentWrap.appendChild(item);
@@ -569,7 +576,7 @@ function showTutorialModal(nodeType) {
 
         const crumb = document.createElement("div");
         crumb.textContent = `${step.emoji} 第 ${index + 1} 步 / 共 ${tutorial.steps.length} 步`;
-        crumb.style.cssText = "font-size:13px;font-weight:700;color:#93c5fd;";
+        crumb.style.cssText = "font-size:16px;font-weight:700;color:#93c5fd;";
         topBar.appendChild(crumb);
 
         const backButton = document.createElement("button");
@@ -582,7 +589,7 @@ function showTutorialModal(nodeType) {
             "background:rgba(30,41,59,0.9)",
             "color:#e2e8f0",
             "cursor:pointer",
-            "font-size:13px",
+            "font-size:15px",
         ].join(";");
         backButton.onclick = () => {
             renderDirectory();
@@ -593,45 +600,55 @@ function showTutorialModal(nodeType) {
 
         const hero = document.createElement("div");
         hero.style.cssText = [
-            "background:linear-gradient(135deg, rgba(29,78,216,0.16), rgba(14,165,233,0.08))",
-            "border:1px solid rgba(96,165,250,0.18)",
-            "border-radius:22px",
-            "padding:22px 22px 18px",
+            "background:#172033",
+            "border:1px solid rgba(96,165,250,0.16)",
+            "border-radius:18px",
+            "padding:20px 20px 16px",
             "margin-bottom:18px",
         ].join(";");
 
         const heroTitle = document.createElement("div");
         heroTitle.textContent = `${step.emoji} ${step.title}`;
-        heroTitle.style.cssText = "font-size:24px;font-weight:800;line-height:1.3;margin-bottom:12px;color:#ffffff;";
+        heroTitle.style.cssText = "font-size:28px;font-weight:800;line-height:1.3;margin-bottom:12px;color:#ffffff;";
         hero.appendChild(heroTitle);
 
         const heroSummary = document.createElement("div");
         heroSummary.textContent = step.summary;
-        heroSummary.style.cssText = "font-size:15px;line-height:1.8;color:#dbeafe;";
+        heroSummary.style.cssText = "font-size:18px;line-height:1.85;color:#cbd5e1;";
         hero.appendChild(heroSummary);
         contentWrap.appendChild(hero);
 
-        (step.content || []).forEach((paragraph, paragraphIndex) => {
-            const card = document.createElement("div");
-            card.style.cssText = [
-                "background:rgba(15,23,42,0.9)",
-                "border:1px solid rgba(148,163,184,0.14)",
-                "border-radius:18px",
-                "padding:18px",
-                "margin-bottom:12px",
-            ].join(";");
+        const article = document.createElement("div");
+        article.style.cssText = [
+            "background:#111827",
+            "border:1px solid rgba(148,163,184,0.12)",
+            "border-radius:16px",
+            "padding:18px 18px 6px",
+            "margin-bottom:14px",
+        ].join(";");
 
-            const cardTitle = document.createElement("div");
-            cardTitle.textContent = `重点 ${paragraphIndex + 1}`;
-            cardTitle.style.cssText = "font-size:12px;font-weight:700;color:#60a5fa;letter-spacing:0.06em;margin-bottom:10px;";
-            card.appendChild(cardTitle);
+        const articleTitle = document.createElement("div");
+        articleTitle.textContent = "正文说明";
+        articleTitle.style.cssText = "font-size:17px;font-weight:800;color:#93c5fd;margin-bottom:14px;";
+        article.appendChild(articleTitle);
+
+        (step.content || []).forEach((paragraph, paragraphIndex) => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;";
+
+            const marker = document.createElement("div");
+            marker.textContent = `${paragraphIndex + 1}`;
+            marker.style.cssText = "width:26px;height:26px;line-height:26px;text-align:center;border-radius:999px;background:rgba(37,99,235,0.16);color:#93c5fd;font-size:14px;font-weight:800;flex:0 0 auto;margin-top:2px;";
+            row.appendChild(marker);
 
             const text = document.createElement("div");
             text.textContent = paragraph;
-            text.style.cssText = "font-size:15px;line-height:1.85;color:#edf2f7;";
-            card.appendChild(text);
-            contentWrap.appendChild(card);
+            text.style.cssText = "font-size:18px;line-height:1.9;color:#e5edf7;";
+            row.appendChild(text);
+
+            article.appendChild(row);
         });
+        contentWrap.appendChild(article);
 
         const tipsSection = createTutorialSection("✨ 实用提示", step.tips, "rgba(16,185,129,0.10)", "#6ee7b7");
         if (tipsSection) {
