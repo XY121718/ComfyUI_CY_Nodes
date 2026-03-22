@@ -94,6 +94,10 @@ ASPECT_DISPLAY_MAP = {
     "3:4": "3:4",
     "16:9": "16:9",
     "9:16": "9:16",
+    "4:1": "4:1",
+    "1:4": "1:4",
+    "8:1": "8:1",
+    "1:8": "1:8",
     "2:3": "2:3",
     "3:2": "3:2",
     "1:1": "1:1",
@@ -112,6 +116,9 @@ IMAGE_SIZE_DISPLAY_MAP = {
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
 RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
+XHEAI_UNSUPPORTED_MODELS = {"nano-banana-2-2k", "nano-banana-2-4k"}
+FLASH_EXTRA_ASPECTS = {"1:4", "4:1", "1:8", "8:1"}
+FLASH_EXTRA_ASPECT_MODEL = "gemini-3.1-flash-image-preview"
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -180,6 +187,12 @@ def make_request(method, url, timeout=REQUEST_TIMEOUT, **kwargs):
     """发送请求，不重试"""
     kwargs.setdefault("verify", False)
     response = requests.request(method, url, timeout=timeout, **kwargs)
+    if not response.ok:
+        try:
+            error_body = response.text[:500]
+        except Exception:
+            error_body = "(无法读取响应体)"
+        print(f"[ERROR] API 返回 {response.status_code}: {error_body}")
     response.raise_for_status()
     return response
 
@@ -408,6 +421,17 @@ class CYImageEdit:
             self._get_input_value(inputs, "匹配参考尺寸", "match_reference_size", default=False)
         )
 
+        if relay_clean == "https://api.xheai.cc" and model_select in XHEAI_UNSUPPORTED_MODELS:
+            raise ValueError(
+                "https://api.xheai.cc 当前不支持模型 "
+                f"{model_select}，请改用 nano-banana-2 或其它可用模型。"
+            )
+
+        if aspect_ratio in FLASH_EXTRA_ASPECTS and model_select != FLASH_EXTRA_ASPECT_MODEL:
+            raise ValueError(
+                f"比例 {aspect_ratio} 仅支持模型 {FLASH_EXTRA_ASPECT_MODEL}。"
+            )
+
         if cfg_dirty:
             with CONFIG_LOCK:
                 with CONFIG_PATH.open("w", encoding="utf-8") as fp:
@@ -525,9 +549,6 @@ class CYImageEdit:
 
         endpoint = build_endpoint(relay_base_url, EDIT_ENDPOINT_PATH)
 
-        def clone_files(entries):
-            return [(field, (meta[0], meta[1], meta[2])) for field, meta in entries]
-
         def files_for_indexes(indexes: Optional[List[int]]):
             if not indexes:
                 return base_files
@@ -543,27 +564,26 @@ class CYImageEdit:
             aspect_for_call = channel_config.get("aspect") or aspect_value
             image_indexes = extra.get("image_indexes") if extra else None
             selected_entries = files_for_indexes(image_indexes)
+            image_payloads = [base64.b64encode(meta[1]).decode("ascii") for _, meta in selected_entries]
             payload = {
                 "model": model_value,
                 "prompt": prompt_value,
                 "aspect_ratio": aspect_for_call,
-                "response_format": "url",
+                "image_size": image_size_value,
+                "image": image_payloads[0] if len(image_payloads) == 1 else image_payloads,
             }
-
-            if image_size_value != "Auto":
-                payload["image_size"] = image_size_value.lower()
 
             # 精简日志：只显示关键信息
             prompt_preview = prompt_value[:20] + "..." if len(prompt_value) > 20 else prompt_value
             print(f"[CY图片编辑] 请求: model={model_value}, prompt=\"{prompt_preview}\", seed={seed}")
 
-            headers = {"Authorization": f"Bearer {current_key}"}
+            # This relay expects image edits as JSON with base64 image data.
+            headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
             res = make_request(
                 "post",
                 endpoint,
                 headers=headers,
-                data=payload,
-                files=clone_files(selected_entries),
+                json=payload,
                 timeout=REQUEST_TIMEOUT,
             )
             res_json = res.json()

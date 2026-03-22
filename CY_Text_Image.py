@@ -100,6 +100,10 @@ ASPECT_DISPLAY_MAP = {
     "3:4": "3:4",
     "16:9": "16:9",
     "9:16": "9:16",
+    "4:1": "4:1",
+    "1:4": "1:4",
+    "8:1": "8:1",
+    "1:8": "1:8",
     "2:3": "2:3",
     "3:2": "3:2",
     "1:1": "1:1",
@@ -118,6 +122,9 @@ IMAGE_SIZE_DISPLAY_MAP = {
 RELAY_FIELD_LABEL = "中转网址"
 RELAY_CONFIG_FIELD = "relay_url"
 RELAY_URL_OPTIONS = ["https://api.xheai.cc", "https://ai.aicy168.top"]
+XHEAI_UNSUPPORTED_MODELS = {"nano-banana-2-2k", "nano-banana-2-4k"}
+FLASH_EXTRA_ASPECTS = {"1:4", "4:1", "1:8", "8:1"}
+FLASH_EXTRA_ASPECT_MODEL = "gemini-3.1-flash-image-preview"
 
 
 def normalize_base_url(candidate: Optional[str]) -> str:
@@ -396,6 +403,17 @@ class CYTextToImage:
         model_select = self._get_input_value(inputs, "模型", "model_select", default=self.MODEL_OPTIONS[0])
         aspect_ratio = self._get_input_value(inputs, "默认宽高比", "aspect_ratio", default=self.ASPECT_OPTIONS[0])
         image_size = self._get_input_value(inputs, "图像尺寸", "image_size", default=self.IMAGE_SIZE_OPTIONS[0])
+
+        if relay_clean == "https://api.xheai.cc" and model_select in XHEAI_UNSUPPORTED_MODELS:
+            raise ValueError(
+                "https://api.xheai.cc 当前不支持模型 "
+                f"{model_select}，请改用 nano-banana-2 或其它可用模型。"
+            )
+
+        if aspect_ratio in FLASH_EXTRA_ASPECTS and model_select != FLASH_EXTRA_ASPECT_MODEL:
+            raise ValueError(
+                f"比例 {aspect_ratio} 仅支持模型 {FLASH_EXTRA_ASPECT_MODEL}。"
+            )
 
         if cfg_dirty:
             with CONFIG_LOCK:

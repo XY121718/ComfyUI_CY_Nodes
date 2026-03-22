@@ -1,359 +1,524 @@
 import { app } from "../../scripts/app.js";
 
 const EXTENSION_NAME = "CY.BananaPro.Fold";
-const TEXT_TO_IMAGE_NODES = ["CYTextToImage", "CYImageEdit"];
+const TARGET_NODES = ["CYTextToImage", "CYImageEdit"];
 
 const LINK_BUTTON_TEXT = "直达星核AI";
 const LINK_BUTTON_URL = "https://api.xheai.cc";
 const TOKEN_API_PATH = "/api/open/token";
 const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc"];
+const RELAY_MODEL_BLACKLIST = {
+    "https://api.xheai.cc": ["nano-banana-2-2k", "nano-banana-2-4k"],
+};
+const FLASH_EXTRA_ASPECT_MODEL = "gemini-3.1-flash-image-preview";
+const FLASH_EXTRA_ASPECTS = ["1:4", "4:1", "1:8", "8:1"];
 
-const PROMPT_WIDGET_NAME = "提示词";
+const WIDGET_NAME_PROMPT = "提示词";
+const WIDGET_NAME_RELAY = "中转网址";
+const WIDGET_NAME_MODEL = "模型";
+const WIDGET_NAME_MASTER_KEY = "总Key";
+const WIDGET_NAME_KEY1 = "Key1";
+const WIDGET_NAME_CREATE_TOKEN = "创建令牌";
+const WIDGET_NAME_CONCURRENCY = "生成张数";
+const WIDGET_NAME_ASPECT = "默认宽高比";
+const WIDGET_NAME_SIZE = "图像尺寸";
 const PROMPT_DEFAULT_ROWS = 8;
 
-// 显示分组选择弹窗
+function normalizeRelayUrl(value) {
+    return (value || "").trim().replace(/[\\/]+$/, "");
+}
+
+function getRelayBlacklist(relayUrl) {
+    return RELAY_MODEL_BLACKLIST[normalizeRelayUrl(relayUrl)] || [];
+}
+
+function findWidgetByName(node, name) {
+    return node.widgets?.find((widget) => widget.name === name) || null;
+}
+
+function findRelayWidget(node) {
+    const byName = findWidgetByName(node, WIDGET_NAME_RELAY);
+    if (byName) return byName;
+
+    return node.widgets?.find((widget) => {
+        const values = widget?.options?.values;
+        return Array.isArray(values)
+            && values.includes("https://api.xheai.cc")
+            && values.includes("https://ai.aicy168.top");
+    }) || null;
+}
+
+function findModelWidget(node) {
+    const byName = findWidgetByName(node, WIDGET_NAME_MODEL);
+    if (byName) return byName;
+
+    return node.widgets?.find((widget) => {
+        const values = widget?.options?.values;
+        return Array.isArray(values)
+            && values.includes("nano-banana-2")
+            && values.includes("nano-banana-2-2k")
+            && values.includes("nano-banana-2-4k");
+    }) || null;
+}
+
+function findAspectWidget(node) {
+    const byName = findWidgetByName(node, WIDGET_NAME_ASPECT);
+    if (byName) return byName;
+
+    return node.widgets?.find((widget) => {
+        const values = widget?.options?.values;
+        return Array.isArray(values)
+            && values.includes("1:1")
+            && values.includes("4:3")
+            && values.includes("16:9")
+            && values.includes("21:9");
+    }) || null;
+}
+
+function wrapWidgetCallback(widget, key, callback) {
+    if (!widget || widget[key]) return;
+    widget[key] = true;
+    const oldCallback = widget.callback;
+    widget.callback = function (...args) {
+        if (oldCallback) {
+            oldCallback.apply(this, args);
+        }
+        callback(...args);
+    };
+}
+
 function showGroupSelector(groups, onSelect) {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.6); z-index: 99999;
-        display: flex; align-items: center; justify-content: center;
-    `;
+    const overlay = document.createElement("div");
+    overlay.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "background:rgba(0,0,0,0.6)",
+        "z-index:99999",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+    ].join(";");
 
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-        background: #2a2a2a; border-radius: 12px; padding: 24px;
-        min-width: 320px; max-width: 90vw; color: #fff;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    `;
+    const modal = document.createElement("div");
+    modal.style.cssText = [
+        "background:#2a2a2a",
+        "border-radius:12px",
+        "padding:24px",
+        "min-width:320px",
+        "max-width:90vw",
+        "color:#fff",
+        "box-shadow:0 8px 32px rgba(0,0,0,0.4)",
+    ].join(";");
 
-    const title = document.createElement('h3');
-    title.textContent = '选择分组';
-    title.style.cssText = 'margin: 0 0 16px; font-size: 18px; font-weight: 600;';
+    const title = document.createElement("h3");
+    title.textContent = "选择分组";
+    title.style.cssText = "margin:0 0 16px;font-size:18px;font-weight:600;";
     modal.appendChild(title);
 
-    const hint = document.createElement('p');
-    hint.textContent = '该模型存在多个分组，请选择一个：';
-    hint.style.cssText = 'margin: 0 0 16px; font-size: 14px; color: #aaa;';
+    const hint = document.createElement("p");
+    hint.textContent = "该模型存在多个分组，请选择一个：";
+    hint.style.cssText = "margin:0 0 16px;font-size:14px;color:#aaa;";
     modal.appendChild(hint);
 
-    const list = document.createElement('div');
-    list.style.cssText = 'display: flex; flex-direction: column; gap: 8px;';
+    const list = document.createElement("div");
+    list.style.cssText = "display:flex;flex-direction:column;gap:8px;";
 
-    groups.forEach(group => {
-        const btn = document.createElement('button');
-        btn.textContent = group;
-        btn.style.cssText = `
-            display: block; width: 100%; padding: 12px 16px;
-            background: #3a3a3a; border: 1px solid #4a4a4a;
-            color: #fff; border-radius: 8px; cursor: pointer;
-            font-size: 14px; text-align: left;
-            transition: all 0.2s;
-        `;
-        btn.onmouseover = () => {
-            btn.style.background = '#4a9eff';
-            btn.style.borderColor = '#4a9eff';
+    groups.forEach((group) => {
+        const button = document.createElement("button");
+        button.textContent = group;
+        button.style.cssText = [
+            "display:block",
+            "width:100%",
+            "padding:12px 16px",
+            "background:#3a3a3a",
+            "border:1px solid #4a4a4a",
+            "color:#fff",
+            "border-radius:8px",
+            "cursor:pointer",
+            "font-size:14px",
+            "text-align:left",
+        ].join(";");
+        button.onmouseover = () => {
+            button.style.background = "#4a9eff";
+            button.style.borderColor = "#4a9eff";
         };
-        btn.onmouseout = () => {
-            btn.style.background = '#3a3a3a';
-            btn.style.borderColor = '#4a4a4a';
+        button.onmouseout = () => {
+            button.style.background = "#3a3a3a";
+            button.style.borderColor = "#4a4a4a";
         };
-        btn.onclick = () => {
+        button.onclick = () => {
             document.body.removeChild(overlay);
             onSelect(group);
         };
-        list.appendChild(btn);
+        list.appendChild(button);
     });
 
     modal.appendChild(list);
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = '取消';
-    cancelBtn.style.cssText = `
-        margin-top: 16px; padding: 10px 20px;
-        background: transparent; border: 1px solid #555;
-        color: #aaa; border-radius: 6px; cursor: pointer;
-        font-size: 14px;
-    `;
-    cancelBtn.onclick = () => document.body.removeChild(overlay);
-    modal.appendChild(cancelBtn);
+    const cancelButton = document.createElement("button");
+    cancelButton.textContent = "取消";
+    cancelButton.style.cssText = [
+        "margin-top:16px",
+        "padding:10px 20px",
+        "background:transparent",
+        "border:1px solid #555",
+        "color:#aaa",
+        "border-radius:6px",
+        "cursor:pointer",
+        "font-size:14px",
+    ].join(";");
+    cancelButton.onclick = () => document.body.removeChild(overlay);
+    modal.appendChild(cancelButton);
 
     overlay.appendChild(modal);
-    overlay.onclick = (e) => {
-        if (e.target === overlay) document.body.removeChild(overlay);
+    overlay.onclick = (event) => {
+        if (event.target === overlay) {
+            document.body.removeChild(overlay);
+        }
     };
     document.body.appendChild(overlay);
 }
 
-// 显示消息弹窗（成功/失败）
 function showMessage(message, isSuccess = true) {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.5); z-index: 99999;
-        display: flex; align-items: center; justify-content: center;
-    `;
+    const overlay = document.createElement("div");
+    overlay.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "background:rgba(0,0,0,0.5)",
+        "z-index:99999",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+    ].join(";");
 
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-        background: #2a2a2a; border-radius: 12px; padding: 24px 32px;
-        min-width: 280px; max-width: 90vw; color: #fff;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-        text-align: center;
-    `;
+    const modal = document.createElement("div");
+    modal.style.cssText = [
+        "background:#2a2a2a",
+        "border-radius:12px",
+        "padding:24px 32px",
+        "min-width:280px",
+        "max-width:90vw",
+        "color:#fff",
+        "box-shadow:0 8px 32px rgba(0,0,0,0.4)",
+        "text-align:center",
+    ].join(";");
 
-    const icon = document.createElement('div');
-    icon.textContent = isSuccess ? '✅' : '❌';
-    icon.style.cssText = 'font-size: 48px; margin-bottom: 16px;';
+    const icon = document.createElement("div");
+    icon.textContent = isSuccess ? "✅" : "❌";
+    icon.style.cssText = "font-size:48px;margin-bottom:16px;";
     modal.appendChild(icon);
 
-    const text = document.createElement('p');
+    const text = document.createElement("p");
     text.textContent = message;
-    text.style.cssText = `
-        margin: 0 0 20px; font-size: 16px; line-height: 1.5;
-        color: ${isSuccess ? '#4ade80' : '#f87171'};
-    `;
+    text.style.cssText = [
+        "margin:0 0 20px",
+        "font-size:16px",
+        "line-height:1.5",
+        `color:${isSuccess ? "#4ade80" : "#f87171"}`,
+    ].join(";");
     modal.appendChild(text);
 
-    const okBtn = document.createElement('button');
-    okBtn.textContent = '确定';
-    okBtn.style.cssText = `
-        padding: 10px 32px; background: ${isSuccess ? '#4a9eff' : '#666'};
-        border: none; color: #fff; border-radius: 6px;
-        cursor: pointer; font-size: 14px;
-    `;
-    okBtn.onclick = () => document.body.removeChild(overlay);
-    modal.appendChild(okBtn);
+    const okButton = document.createElement("button");
+    okButton.textContent = "确定";
+    okButton.style.cssText = [
+        "padding:10px 32px",
+        `background:${isSuccess ? "#4a9eff" : "#666"}`,
+        "border:none",
+        "color:#fff",
+        "border-radius:6px",
+        "cursor:pointer",
+        "font-size:14px",
+    ].join(";");
+    okButton.onclick = () => document.body.removeChild(overlay);
+    modal.appendChild(okButton);
 
     overlay.appendChild(modal);
-    overlay.onclick = (e) => {
-        if (e.target === overlay) document.body.removeChild(overlay);
+    overlay.onclick = (event) => {
+        if (event.target === overlay) {
+            document.body.removeChild(overlay);
+        }
     };
     document.body.appendChild(overlay);
-    okBtn.focus();
+    okButton.focus();
 }
 
-// 创建令牌
-async function createToken(node, group = null) {
-    const relayWidget = node.widgets.find(w => w.name === "中转网址");
-    const masterKeyWidget = node.widgets.find(w => w.name === "总Key");
-    const modelWidget = node.widgets.find(w => w.name === "模型");
-    const key1Widget = node.widgets.find(w => w.name === "Key1");
+function updateModelOptionsByRelay(node) {
+    const relayWidget = findRelayWidget(node);
+    const modelWidget = findModelWidget(node);
+    if (!relayWidget || !modelWidget) return;
 
-    if (!masterKeyWidget?.value?.trim()) {
-        showMessage("请在总Key随便填入一个有效Key", false);
+    const currentValues = modelWidget.options?.values;
+    if (!Array.isArray(currentValues)) return;
+
+    if (!Array.isArray(modelWidget.__cyOriginalValues)) {
+        modelWidget.__cyOriginalValues = [...currentValues];
+    }
+
+    const blacklist = new Set(getRelayBlacklist(relayWidget.value));
+    const nextValues = modelWidget.__cyOriginalValues.filter((value) => !blacklist.has(value));
+    if (!nextValues.length) return;
+
+    modelWidget.options.values = nextValues;
+
+    if (!nextValues.includes(modelWidget.value)) {
+        modelWidget.value = nextValues[0];
+        if (modelWidget.inputEl) {
+            modelWidget.inputEl.value = nextValues[0];
+        }
+    }
+
+    node.setDirtyCanvas?.(true, true);
+}
+
+function updateAspectOptionsByModel(node) {
+    const modelWidget = findModelWidget(node);
+    const aspectWidget = findAspectWidget(node);
+    if (!modelWidget || !aspectWidget) return;
+
+    const currentValues = aspectWidget.options?.values;
+    if (!Array.isArray(currentValues)) return;
+
+    if (!Array.isArray(aspectWidget.__cyOriginalValues)) {
+        aspectWidget.__cyOriginalValues = [...currentValues];
+    }
+
+    const allowExtra = modelWidget.value === FLASH_EXTRA_ASPECT_MODEL;
+    const nextValues = aspectWidget.__cyOriginalValues.filter((value) => {
+        if (!FLASH_EXTRA_ASPECTS.includes(value)) {
+            return true;
+        }
+        return allowExtra;
+    });
+    if (!nextValues.length) return;
+
+    aspectWidget.options.values = nextValues;
+
+    if (!nextValues.includes(aspectWidget.value)) {
+        aspectWidget.value = nextValues[0];
+        if (aspectWidget.inputEl) {
+            aspectWidget.inputEl.value = nextValues[0];
+        }
+    }
+
+    node.setDirtyCanvas?.(true, true);
+}
+
+async function createToken(node, group = null) {
+    const relayWidget = findRelayWidget(node);
+    const masterKeyWidget = findWidgetByName(node, WIDGET_NAME_MASTER_KEY);
+    const modelWidget = findModelWidget(node);
+    const key1Widget = findWidgetByName(node, WIDGET_NAME_KEY1);
+
+    if (!relayWidget || !masterKeyWidget || !modelWidget || !key1Widget) {
+        showMessage("未找到创建令牌所需控件。", false);
         return;
     }
 
-    const baseUrl = relayWidget?.value || SUPPORTED_RELAY_URLS[0];
-    const tokenApiUrl = baseUrl.replace(/\/+$/, '') + TOKEN_API_PATH;
-    const model = modelWidget?.value || "gemini-3-pro-image-preview";
+    if (!masterKeyWidget.value?.trim()) {
+        showMessage("请先填写总Key。", false);
+        return;
+    }
+
+    const baseUrl = normalizeRelayUrl(relayWidget.value || SUPPORTED_RELAY_URLS[0]);
+    const tokenApiUrl = `${baseUrl}${TOKEN_API_PATH}`;
+    const body = { model: modelWidget.value || "gemini-3-pro-image-preview" };
+    if (group) {
+        body.group = group;
+    }
 
     try {
-        const body = { model };
-        if (group) body.group = group;
-
-        const resp = await fetch(tokenApiUrl, {
+        const response = await fetch(tokenApiUrl, {
             method: "POST",
             headers: {
-                "Authorization": `Bearer ${masterKeyWidget.value.trim()}`,
-                "Content-Type": "application/json"
+                Authorization: `Bearer ${masterKeyWidget.value.trim()}`,
+                "Content-Type": "application/json",
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
         });
-
-        const result = await resp.json();
+        const result = await response.json();
 
         if (result.data?.need_select) {
-            showGroupSelector(result.data.groups || [], (g) => createToken(node, g));
-        } else if (result.success && result.data?.key) {
-            if (key1Widget) {
-                key1Widget.value = result.data.key;
-                if (key1Widget.inputEl) key1Widget.inputEl.value = result.data.key;
-            }
-            showMessage("令牌创建成功！已自动填入Key1", true);
-        } else {
-            showMessage("创建失败: " + (result.message || "未知错误"), false);
+            showGroupSelector(result.data.groups || [], (selectedGroup) => {
+                createToken(node, selectedGroup);
+            });
+            return;
         }
-    } catch (e) {
-        showMessage("请求失败: " + e.message, false);
+
+        if (result.success && result.data?.key) {
+            key1Widget.value = result.data.key;
+            if (key1Widget.inputEl) {
+                key1Widget.inputEl.value = result.data.key;
+            }
+            showMessage("令牌创建成功，已自动填入 Key1。", true);
+            return;
+        }
+
+        showMessage(`创建失败: ${result.message || "未知错误"}`, false);
+    } catch (error) {
+        showMessage(`请求失败: ${error.message}`, false);
     }
 }
 
-// --- 核心修复：添加按钮逻辑 ---
-// 关键：不使用 splice！直接 addWidget 把按钮放在数组最后，不会破坏后端的索引映射
 function addCreateTokenButton(node) {
-    // 检查是否已经添加过按钮
-    if (node.widgets.find(w => w.name === "创建令牌")) return;
+    if (node.widgets?.find((widget) => widget.name === WIDGET_NAME_CREATE_TOKEN)) {
+        return;
+    }
 
-    const relayWidget = node.widgets.find(w => w.name === "中转网址");
-    const masterKeyWidget = node.widgets.find(w => w.name === "总Key");
+    const relayWidget = findRelayWidget(node);
+    const masterKeyWidget = findWidgetByName(node, WIDGET_NAME_MASTER_KEY);
+    if (!relayWidget || !masterKeyWidget) {
+        return;
+    }
 
-    if (!relayWidget || !masterKeyWidget) return;
-
-    // 创建按钮 widget - 直接添加到末尾，不使用 splice
-    const tokenButton = node.addWidget("button", "创建令牌", "创建令牌", () => {
+    const button = node.addWidget("button", WIDGET_NAME_CREATE_TOKEN, WIDGET_NAME_CREATE_TOKEN, () => {
         createToken(node);
     });
+    button.label = "✅ 点击自动创建令牌";
+    button.options = { serialize: false };
 
-    // 设置按钮显示的文字
-    tokenButton.label = "✅ 点击自动创建令牌";
-
-    // 必须为 false，防止被保存到工作流JSON里影响后端
-    tokenButton.options = { serialize: false };
-
-    // 动态可见性控制
-    const updateVisibility = () => {
-        const val = relayWidget?.value || "";
-        const isSupported = SUPPORTED_RELAY_URLS.some(url => val.includes(url));
-        if (masterKeyWidget) masterKeyWidget.hidden = !isSupported;
-        tokenButton.hidden = !isSupported;
+    const refresh = () => {
+        const relayUrl = normalizeRelayUrl(relayWidget.value);
+        const supported = SUPPORTED_RELAY_URLS.includes(relayUrl);
+        masterKeyWidget.hidden = !supported;
+        button.hidden = !supported;
+        updateModelOptionsByRelay(node);
+        updateAspectOptionsByModel(node);
     };
 
-    // 监听中转网址变化
-    if (relayWidget && !relayWidget.__cyCallbackWrapped) {
-        relayWidget.__cyCallbackWrapped = true;
-        const oldCallback = relayWidget.callback;
-        relayWidget.callback = function () {
-            if (oldCallback) oldCallback.apply(this, arguments);
-            updateVisibility();
-        };
-    }
-
-    setTimeout(updateVisibility, 100);
+    wrapWidgetCallback(relayWidget, "__cyRelayWrapped", refresh);
+    setTimeout(refresh, 0);
 }
 
-// --- 核心修复：提示词高度逻辑 ---
-// 使用固定高度赋值，而不是累加，防止刷新时高度无限增长
 function setupPromptWidget(node) {
-    const promptWidget = node.widgets.find(w => w.name === PROMPT_WIDGET_NAME);
-    if (!promptWidget || !promptWidget.inputEl || node.__cyPromptSetup) return;
+    const promptWidget = findWidgetByName(node, WIDGET_NAME_PROMPT);
+    if (!promptWidget?.inputEl || node.__cyPromptSetup) {
+        return;
+    }
 
     node.__cyPromptSetup = true;
-    const textarea = promptWidget.inputEl;
-    textarea.style.resize = "none";
-    textarea.rows = PROMPT_DEFAULT_ROWS;
+    promptWidget.inputEl.style.resize = "none";
+    promptWidget.inputEl.rows = PROMPT_DEFAULT_ROWS;
 
-    // 修复：不要直接累加 size，而是设定一个固定合理的基础高度
-    // 如果是新创建的节点（没有保存的高度信息），再进行调整
-    if (node.size[1] < 300) {
+    if (node.size?.[1] < 300) {
         node.size[1] = 420;
     }
 }
 
-// 添加右上角链接按钮
 function addLinkButton(node) {
-    if (node.__cyLinkButton) return;
+    if (node.__cyLinkButton) {
+        return;
+    }
     node.__cyLinkButton = true;
 
-    const oldDraw = node.onDrawForeground;
+    const oldDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function (ctx) {
-        if (oldDraw) oldDraw.apply(this, arguments);
-        const x = this.size[0] - 80, y = -25, w = 70, h = 18;
+        if (oldDrawForeground) {
+            oldDrawForeground.apply(this, arguments);
+        }
+        const x = this.size[0] - 80;
+        const y = -25;
+        const width = 70;
+        const height = 18;
         ctx.fillStyle = "#4a9eff";
         ctx.beginPath();
-        ctx.roundRect(x, y, w, h, 3);
+        ctx.roundRect(x, y, width, height, 3);
         ctx.fill();
         ctx.fillStyle = "#fff";
         ctx.font = "10px Arial";
         ctx.textAlign = "center";
-        ctx.fillText(LINK_BUTTON_TEXT, x + w / 2, y + h / 2 + 4);
+        ctx.fillText(LINK_BUTTON_TEXT, x + width / 2, y + height / 2 + 4);
     };
 
-    const oldDown = node.onMouseDown;
-    node.onMouseDown = function (e, pos) {
+    const oldMouseDown = node.onMouseDown;
+    node.onMouseDown = function (event, pos) {
         if (pos[0] >= this.size[0] - 80 && pos[1] <= 0) {
             window.open(LINK_BUTTON_URL, "_blank");
             return true;
         }
-        return oldDown ? oldDown.apply(this, arguments) : undefined;
+        return oldMouseDown ? oldMouseDown.apply(this, arguments) : undefined;
     };
 }
 
-// 注册扩展
+function maskKeyWidgets(node) {
+    const key1Widget = findWidgetByName(node, WIDGET_NAME_KEY1);
+    if (key1Widget?.inputEl) {
+        key1Widget.label = "Key1（必填，用于生成图片）";
+        key1Widget.inputEl.type = "password";
+        key1Widget.inputEl.autocomplete = "off";
+    }
+
+    const masterKeyWidget = findWidgetByName(node, WIDGET_NAME_MASTER_KEY);
+    if (masterKeyWidget?.inputEl) {
+        masterKeyWidget.label = "总Key（选填，用于自动生成Key1）";
+        masterKeyWidget.inputEl.type = "password";
+        masterKeyWidget.inputEl.autocomplete = "off";
+    }
+}
+
+function fixConcurrencyWidget(node) {
+    if (node.comfyClass !== "CYTextToImage") {
+        return;
+    }
+
+    const concurrencyWidget = findWidgetByName(node, WIDGET_NAME_CONCURRENCY);
+    if (!concurrencyWidget) {
+        return;
+    }
+
+    if (Number.isNaN(concurrencyWidget.value) || concurrencyWidget.value == null) {
+        concurrencyWidget.value = 1;
+        if (concurrencyWidget.inputEl) {
+            concurrencyWidget.inputEl.value = "1";
+        }
+    }
+}
+
+function bindModelAspectFilter(node) {
+    const modelWidget = findModelWidget(node);
+    if (!modelWidget) {
+        return;
+    }
+
+    wrapWidgetCallback(modelWidget, "__cyModelWrapped", () => {
+        updateAspectOptionsByModel(node);
+    });
+}
+
+function refreshComboWidget(node, widgetName, marker) {
+    const widget = findWidgetByName(node, widgetName);
+    if (!widget || widget[marker]) {
+        return;
+    }
+
+    widget[marker] = true;
+    wrapWidgetCallback(widget, `${marker}_wrapped`, (value) => {
+        widget.value = value;
+        node.setDirtyCanvas?.(true, true);
+    });
+}
+
 app.registerExtension({
     name: EXTENSION_NAME,
 
     async nodeCreated(node) {
-        if (!TEXT_TO_IMAGE_NODES.includes(node.comfyClass)) return;
+        if (!TARGET_NODES.includes(node.comfyClass)) {
+            return;
+        }
 
         addLinkButton(node);
 
-        // 放在 setTimeout 确保 Python 端的 Widget 加载完毕
         setTimeout(() => {
             addCreateTokenButton(node);
             setupPromptWidget(node);
-
-            // Key1 设置：修改标签名称和遮罩
-            const key1 = node.widgets.find(w => w.name === "Key1");
-            if (key1) {
-                // 修改显示的标签名称
-                key1.label = "Key1（必填，用于生成图片）";
-                if (key1.inputEl) {
-                    key1.inputEl.type = "password";
-                    key1.inputEl.autocomplete = "off";
-                }
-            }
-
-            // 总Key 设置：修改标签名称和遮罩
-            const master = node.widgets.find(w => w.name === "总Key");
-            if (master) {
-                // 修改显示的标签名称
-                master.label = "总Key（选填，用于自动生成Key1）";
-                if (master.inputEl) {
-                    master.inputEl.type = "password";
-                    master.inputEl.autocomplete = "off";
-                }
-            }
-
-            // 修复复制节点时"生成张数"变成NaN的问题
-            if (node.comfyClass === "CYTextToImage") {
-                const concurrencyWidget = node.widgets?.find(w => w.name === "生成张数");
-                if (concurrencyWidget && (isNaN(concurrencyWidget.value) || concurrencyWidget.value === null || concurrencyWidget.value === undefined)) {
-                    concurrencyWidget.value = 1;
-                    if (concurrencyWidget.inputEl) {
-                        concurrencyWidget.inputEl.value = "1";
-                    }
-                }
-            }
-
-            // 修复宽高比选择器的值更新问题
-            const aspectWidget = node.widgets?.find(w => w.name === "默认宽高比");
-            if (aspectWidget && !aspectWidget.__cyAspectFixed) {
-                aspectWidget.__cyAspectFixed = true;
-                const oldCallback = aspectWidget.callback;
-                aspectWidget.callback = function (value) {
-                    // 强制更新 widget 的值
-                    this.value = value;
-                    // 触发节点重新序列化
-                    if (node.graph) {
-                        node.setDirtyCanvas(true, true);
-                    }
-                    if (oldCallback) {
-                        return oldCallback.apply(this, arguments);
-                    }
-                };
-            }
-
-            // 同样修复图像尺寸选择器
-            const sizeWidget = node.widgets?.find(w => w.name === "图像尺寸");
-            if (sizeWidget && !sizeWidget.__cySizeFixed) {
-                sizeWidget.__cySizeFixed = true;
-                const oldCallback = sizeWidget.callback;
-                sizeWidget.callback = function (value) {
-                    // 强制更新 widget 的值
-                    this.value = value;
-                    // 触发节点重新序列化
-                    if (node.graph) {
-                        node.setDirtyCanvas(true, true);
-                    }
-                    if (oldCallback) {
-                        return oldCallback.apply(this, arguments);
-                    }
-                };
-            }
+            maskKeyWidgets(node);
+            fixConcurrencyWidget(node);
+            bindModelAspectFilter(node);
+            refreshComboWidget(node, WIDGET_NAME_ASPECT, "__cyAspectFixed");
+            refreshComboWidget(node, WIDGET_NAME_SIZE, "__cySizeFixed");
+            updateModelOptionsByRelay(node);
+            updateAspectOptionsByModel(node);
         }, 100);
-    }
+    },
 });
 
 console.log("✅ CY Banana UI 扩展已加载");
