@@ -4,8 +4,10 @@ import { CY_NODE_TUTORIALS } from "./cy_node_tutorials.js";
 const EXTENSION_NAME = "CY.BananaPro.Fold";
 const TARGET_NODES = ["CYTextToImage", "CYImageEdit"];
 
-const LINK_BUTTON_TEXT = "直达星核AI";
-const LINK_BUTTON_URL = "https://api.xheai.cc";
+const LINK_BUTTON_TEXT = "在线生图";
+const LINK_BUTTON_URL = "https://cmagic.xheai.cc";
+const STARCORE_BUTTON_TEXT = "直达星核AI";
+const STARCORE_BUTTON_URL = "https://api.xheai.cc";
 const TUTORIAL_BUTTON_TEXT = "📘 使用教程";
 const TOKEN_API_PATH = "/api/open/token";
 const UPDATE_STATUS_API_PATH = "/cy_nodes/updater/status";
@@ -30,9 +32,9 @@ const PROMPT_DEFAULT_ROWS = 8;
 
 const TOP_BUTTON_HEIGHT = 18;
 const TUTORIAL_BUTTON_Y = 6;
-const LINK_BUTTON_Y = 6;
+const LINK_BUTTON_Y = -25;
 const TUTORIAL_BUTTON_WIDTH = 118;
-const LINK_BUTTON_WIDTH = 70;
+const LINK_BUTTON_WIDTH = 84;
 const LINK_BUTTON_RIGHT_MARGIN = 10;
 
 function normalizeRelayUrl(value) {
@@ -132,6 +134,34 @@ function drawTopButton(ctx, rect, label, background) {
     ctx.font = "10px Arial";
     ctx.textAlign = "center";
     ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 4);
+}
+
+function ensurePulseAnimationStyles() {
+    if (document.getElementById("cy-pulse-animation-style")) {
+        return;
+    }
+
+    const style = document.createElement("style");
+    style.id = "cy-pulse-animation-style";
+    style.textContent = `
+        @keyframes cySoftPulse {
+            0%, 100% {
+                transform: translateY(0) scale(1);
+                box-shadow: 0 8px 20px rgba(59, 130, 246, 0.10);
+            }
+            50% {
+                transform: translateY(-1px) scale(1.035);
+                box-shadow: 0 14px 28px rgba(59, 130, 246, 0.24);
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+function applyPulseStyle(button, accent = "#3b82f6") {
+    ensurePulseAnimationStyles();
+    button.style.animation = "cySoftPulse 1.8s ease-in-out infinite";
+    button.style.boxShadow = `0 8px 20px ${accent}1a`;
 }
 
 function showGroupSelector(groups, onSelect) {
@@ -377,11 +407,12 @@ async function checkAndApplyUpdate() {
         return;
     }
 
-    const localVersion = formatCommitHash(statusResult.local_commit);
-    const remoteVersion = formatCommitHash(statusResult.remote_commit);
+    const pluginVersion = statusResult.plugin_version || "未知";
+    const localCommit = formatCommitHash(statusResult.local_commit);
+    const remoteCommit = formatCommitHash(statusResult.remote_commit);
     const promptMessage = statusResult.update_available === true
-        ? `检测到新版本。\n当前版本：${localVersion}\n最新版本：${remoteVersion}\n\n点击“立即更新”后会自动下载并覆盖插件文件，config.ini、master_key.ini 等本地配置会保留。`
-        : "无法准确判断本地版本，但可以直接从 GitHub 下载最新插件覆盖当前目录。\n\nconfig.ini、master_key.ini 等本地配置会保留。";
+        ? `检测到新版本。\n当前版本：${pluginVersion}\n当前提交：${localCommit}\n最新提交：${remoteCommit}\n\n点击“立即更新”后会自动下载并覆盖插件文件，config.ini、master_key.ini 等本地配置会保留。`
+        : `无法准确判断本地版本，但可以直接从 GitHub 下载最新插件覆盖当前目录。\n\n当前版本：${pluginVersion}\n当前提交：${localCommit}\n最新提交：${remoteCommit}\n\nconfig.ini、master_key.ini 等本地配置会保留。`;
 
     showActionDialog("检查到可更新内容", promptMessage, "立即更新", async () => {
         const updateResponse = await fetch(UPDATE_APPLY_API_PATH, { method: "POST" });
@@ -490,11 +521,14 @@ function showTutorialModal(nodeType) {
         "font-weight:700",
         "cursor:pointer",
     ].join(";");
+    applyPulseStyle(updateButton);
     updateButton.onclick = async () => {
         const originalText = updateButton.textContent;
         updateButton.disabled = true;
         updateButton.textContent = "检查中...";
         updateButton.style.opacity = "0.65";
+        updateButton.style.animation = "none";
+        updateButton.style.boxShadow = "none";
         try {
             await checkAndApplyUpdate();
         } catch (error) {
@@ -503,9 +537,29 @@ function showTutorialModal(nodeType) {
             updateButton.disabled = false;
             updateButton.textContent = originalText;
             updateButton.style.opacity = "1";
+            applyPulseStyle(updateButton);
         }
     };
     headerActions.appendChild(updateButton);
+
+    const starcoreButton = document.createElement("button");
+    starcoreButton.type = "button";
+    starcoreButton.textContent = STARCORE_BUTTON_TEXT;
+    starcoreButton.style.cssText = [
+        "padding:9px 14px",
+        "border-radius:12px",
+        "border:1px solid rgba(191,219,254,1)",
+        "background:#ffffff",
+        "color:#2563eb",
+        "font-size:14px",
+        "font-weight:700",
+        "cursor:pointer",
+    ].join(";");
+    applyPulseStyle(starcoreButton);
+    starcoreButton.onclick = () => {
+        window.open(STARCORE_BUTTON_URL, "_blank");
+    };
+    headerActions.appendChild(starcoreButton);
 
     const tag = document.createElement("div");
     tag.textContent = "✨ 节点步骤教程";
