@@ -1,10 +1,12 @@
 import { app } from "../../scripts/app.js";
+import { CY_NODE_TUTORIALS } from "./cy_node_tutorials.js";
 
 const EXTENSION_NAME = "CY.BananaPro.Fold";
 const TARGET_NODES = ["CYTextToImage", "CYImageEdit"];
 
 const LINK_BUTTON_TEXT = "直达星核AI";
 const LINK_BUTTON_URL = "https://api.xheai.cc";
+const TUTORIAL_BUTTON_TEXT = "📘 使用教程";
 const TOKEN_API_PATH = "/api/open/token";
 const SUPPORTED_RELAY_URLS = ["https://api.xheai.cc"];
 const RELAY_MODEL_BLACKLIST = {
@@ -23,6 +25,13 @@ const WIDGET_NAME_CONCURRENCY = "生成张数";
 const WIDGET_NAME_ASPECT = "默认宽高比";
 const WIDGET_NAME_SIZE = "图像尺寸";
 const PROMPT_DEFAULT_ROWS = 8;
+
+const TOP_BUTTON_HEIGHT = 18;
+const TUTORIAL_BUTTON_Y = 6;
+const LINK_BUTTON_Y = 6;
+const TUTORIAL_BUTTON_WIDTH = 118;
+const LINK_BUTTON_WIDTH = 70;
+const LINK_BUTTON_RIGHT_MARGIN = 10;
 
 function normalizeRelayUrl(value) {
     return (value || "").trim().replace(/[\\/]+$/, "");
@@ -85,6 +94,42 @@ function wrapWidgetCallback(widget, key, callback) {
         }
         callback(...args);
     };
+}
+
+function getTutorialButtonRect(node) {
+    return {
+        x: Math.max(8, (node.size[0] - TUTORIAL_BUTTON_WIDTH) / 2),
+        y: TUTORIAL_BUTTON_Y,
+        width: TUTORIAL_BUTTON_WIDTH,
+        height: TOP_BUTTON_HEIGHT,
+    };
+}
+
+function getLinkButtonRect(node) {
+    return {
+        x: node.size[0] - LINK_BUTTON_WIDTH - LINK_BUTTON_RIGHT_MARGIN,
+        y: LINK_BUTTON_Y,
+        width: LINK_BUTTON_WIDTH,
+        height: TOP_BUTTON_HEIGHT,
+    };
+}
+
+function isPointInsideRect(pos, rect) {
+    return pos[0] >= rect.x
+        && pos[0] <= rect.x + rect.width
+        && pos[1] >= rect.y
+        && pos[1] <= rect.y + rect.height;
+}
+
+function drawTopButton(ctx, rect, label, background) {
+    ctx.fillStyle = background;
+    ctx.beginPath();
+    ctx.roundRect(rect.x, rect.y, rect.width, rect.height, 3);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.font = "10px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 4);
 }
 
 function showGroupSelector(groups, onSelect) {
@@ -240,6 +285,400 @@ function showMessage(message, isSuccess = true) {
     };
     document.body.appendChild(overlay);
     okButton.focus();
+}
+
+function createTutorialSection(title, items, background, accent) {
+    if (!Array.isArray(items) || !items.length) {
+        return null;
+    }
+
+    const box = document.createElement("div");
+    box.style.cssText = [
+        `background:${background}`,
+        `border-left:4px solid ${accent}`,
+        "border-radius:12px",
+        "padding:14px 16px",
+        "margin-top:14px",
+    ].join(";");
+
+    const heading = document.createElement("div");
+    heading.textContent = title;
+    heading.style.cssText = [
+        `color:${accent}`,
+        "font-size:13px",
+        "font-weight:700",
+        "margin-bottom:10px",
+    ].join(";");
+    box.appendChild(heading);
+
+    items.forEach((item) => {
+        const row = document.createElement("div");
+        row.textContent = item;
+        row.style.cssText = "color:#f3f4f6;font-size:14px;line-height:1.7;margin-bottom:8px;";
+        box.appendChild(row);
+    });
+
+    return box;
+}
+
+function showTutorialModal(nodeType) {
+    const tutorial = CY_NODE_TUTORIALS[nodeType];
+    if (!tutorial) {
+        showMessage("未找到该节点的教程内容。", false);
+        return;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "background:rgba(8,12,20,0.76)",
+        "backdrop-filter:blur(4px)",
+        "z-index:99999",
+        "display:flex",
+        "align-items:center",
+        "justify-content:center",
+        "padding:28px",
+    ].join(";");
+
+    const modal = document.createElement("div");
+    modal.style.cssText = [
+        "width:min(920px, 92vw)",
+        "max-height:88vh",
+        "overflow:hidden",
+        "border-radius:24px",
+        "background:linear-gradient(180deg, #131a26 0%, #0f1520 100%)",
+        "border:1px solid rgba(148,163,184,0.18)",
+        "box-shadow:0 24px 80px rgba(0,0,0,0.45)",
+        "display:flex",
+        "flex-direction:column",
+        "color:#fff",
+    ].join(";");
+
+    const header = document.createElement("div");
+    header.style.cssText = [
+        "padding:24px 28px 18px",
+        "border-bottom:1px solid rgba(148,163,184,0.14)",
+        "background:linear-gradient(135deg, rgba(74,158,255,0.18), rgba(16,185,129,0.08))",
+    ].join(";");
+
+    const tag = document.createElement("div");
+    tag.textContent = "✨ 节点步骤教程";
+    tag.style.cssText = "font-size:12px;font-weight:700;color:#93c5fd;letter-spacing:0.08em;margin-bottom:10px;";
+    header.appendChild(tag);
+
+    const title = document.createElement("div");
+    title.textContent = tutorial.title;
+    title.style.cssText = "font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px;";
+    header.appendChild(title);
+
+    const subtitle = document.createElement("div");
+    subtitle.textContent = tutorial.subtitle;
+    subtitle.style.cssText = "font-size:15px;color:#dbe7ff;line-height:1.7;";
+    header.appendChild(subtitle);
+
+    const contentWrap = document.createElement("div");
+    contentWrap.style.cssText = "flex:1;overflow:auto;padding:24px 28px 28px;";
+
+    const footer = document.createElement("div");
+    footer.style.cssText = [
+        "padding:16px 28px 24px",
+        "border-top:1px solid rgba(148,163,184,0.12)",
+        "display:flex",
+        "justify-content:space-between",
+        "align-items:center",
+        "gap:16px",
+        "flex-wrap:wrap",
+    ].join(";");
+
+    const status = document.createElement("div");
+    status.style.cssText = "font-size:13px;color:#94a3b8;";
+    footer.appendChild(status);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;";
+
+    const prevButton = document.createElement("button");
+    prevButton.type = "button";
+    prevButton.textContent = "⬅ 上一步";
+    prevButton.style.cssText = [
+        "padding:10px 16px",
+        "border-radius:12px",
+        "border:1px solid rgba(148,163,184,0.18)",
+        "background:#1e293b",
+        "color:#e2e8f0",
+        "cursor:pointer",
+    ].join(";");
+
+    const nextButton = document.createElement("button");
+    nextButton.type = "button";
+    nextButton.textContent = "下一步 ➜";
+    nextButton.style.cssText = [
+        "padding:10px 16px",
+        "border-radius:12px",
+        "border:none",
+        "background:linear-gradient(135deg, #3b82f6, #2563eb)",
+        "color:#fff",
+        "cursor:pointer",
+        "font-weight:700",
+    ].join(";");
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.textContent = "关闭";
+    closeButton.style.cssText = [
+        "padding:10px 18px",
+        "border-radius:12px",
+        "border:1px solid rgba(148,163,184,0.18)",
+        "background:rgba(15,23,42,0.92)",
+        "color:#f8fafc",
+        "cursor:pointer",
+    ].join(";");
+
+    actions.appendChild(prevButton);
+    actions.appendChild(nextButton);
+    actions.appendChild(closeButton);
+    footer.appendChild(actions);
+
+    let currentStepIndex = null;
+
+    const closeModal = () => {
+        if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+        }
+    };
+
+    const updateFooter = () => {
+        if (currentStepIndex == null) {
+            status.textContent = `当前在目录页，共 ${tutorial.steps.length} 个步骤。`;
+            prevButton.disabled = true;
+            nextButton.disabled = false;
+            prevButton.style.opacity = "0.45";
+            nextButton.style.opacity = "1";
+            nextButton.style.cursor = "pointer";
+            nextButton.textContent = "开始阅读 ➜";
+        } else {
+            status.textContent = `正在查看第 ${currentStepIndex + 1} 步 / 共 ${tutorial.steps.length} 步`;
+            prevButton.disabled = currentStepIndex === 0;
+            nextButton.disabled = currentStepIndex === tutorial.steps.length - 1;
+            prevButton.style.opacity = currentStepIndex === 0 ? "0.45" : "1";
+            nextButton.style.opacity = currentStepIndex === tutorial.steps.length - 1 ? "0.55" : "1";
+            nextButton.style.cursor = currentStepIndex === tutorial.steps.length - 1 ? "default" : "pointer";
+            nextButton.textContent = currentStepIndex === tutorial.steps.length - 1 ? "已到最后一步" : "下一步 ➜";
+        }
+
+        prevButton.style.cursor = prevButton.disabled ? "default" : "pointer";
+    };
+
+    const renderDirectory = () => {
+        currentStepIndex = null;
+        contentWrap.innerHTML = "";
+
+        const introCard = document.createElement("div");
+        introCard.style.cssText = [
+            "background:rgba(59,130,246,0.10)",
+            "border:1px solid rgba(96,165,250,0.22)",
+            "border-radius:18px",
+            "padding:18px 20px",
+            "margin-bottom:18px",
+        ].join(";");
+
+        const introTitle = document.createElement("div");
+        introTitle.textContent = "🌟 先看这段，能更快上手";
+        introTitle.style.cssText = "font-size:16px;font-weight:700;color:#bfdbfe;margin-bottom:10px;";
+        introCard.appendChild(introTitle);
+
+        const introText = document.createElement("div");
+        introText.textContent = tutorial.intro || "";
+        introText.style.cssText = "font-size:14px;line-height:1.8;color:#eef4ff;";
+        introCard.appendChild(introText);
+        contentWrap.appendChild(introCard);
+
+        const listTitle = document.createElement("div");
+        listTitle.textContent = "📚 教程目录";
+        listTitle.style.cssText = "font-size:18px;font-weight:800;margin-bottom:14px;color:#ffffff;";
+        contentWrap.appendChild(listTitle);
+
+        tutorial.steps.forEach((step, index) => {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.style.cssText = [
+                "width:100%",
+                "text-align:left",
+                "background:linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96))",
+                "border:1px solid rgba(148,163,184,0.18)",
+                "border-radius:18px",
+                "padding:18px",
+                "margin-bottom:12px",
+                "cursor:pointer",
+                "transition:transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease",
+                "box-shadow:0 10px 24px rgba(0,0,0,0.18)",
+            ].join(";");
+            item.onmouseover = () => {
+                item.style.transform = "translateY(-1px)";
+                item.style.borderColor = "rgba(96,165,250,0.5)";
+                item.style.boxShadow = "0 12px 30px rgba(59,130,246,0.16)";
+            };
+            item.onmouseout = () => {
+                item.style.transform = "translateY(0)";
+                item.style.borderColor = "rgba(148,163,184,0.18)";
+                item.style.boxShadow = "0 10px 24px rgba(0,0,0,0.18)";
+            };
+            item.onclick = () => {
+                renderStep(index);
+                updateFooter();
+            };
+
+            const topRow = document.createElement("div");
+            topRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px;flex-wrap:wrap;";
+
+            const heading = document.createElement("div");
+            heading.textContent = `${step.emoji} 第 ${index + 1} 步 · ${step.title}`;
+            heading.style.cssText = "font-size:16px;font-weight:800;color:#f8fafc;";
+            topRow.appendChild(heading);
+
+            const badge = document.createElement("div");
+            badge.textContent = "点击查看";
+            badge.style.cssText = "font-size:12px;color:#93c5fd;background:rgba(37,99,235,0.16);padding:6px 10px;border-radius:999px;white-space:nowrap;";
+            topRow.appendChild(badge);
+
+            item.appendChild(topRow);
+
+            const summary = document.createElement("div");
+            summary.textContent = step.summary;
+            summary.style.cssText = "font-size:14px;line-height:1.75;color:#cbd5e1;";
+            item.appendChild(summary);
+
+            contentWrap.appendChild(item);
+        });
+    };
+
+    const renderStep = (index) => {
+        const step = tutorial.steps[index];
+        if (!step) {
+            renderDirectory();
+            updateFooter();
+            return;
+        }
+
+        currentStepIndex = index;
+        contentWrap.innerHTML = "";
+
+        const topBar = document.createElement("div");
+        topBar.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap;";
+
+        const crumb = document.createElement("div");
+        crumb.textContent = `${step.emoji} 第 ${index + 1} 步 / 共 ${tutorial.steps.length} 步`;
+        crumb.style.cssText = "font-size:13px;font-weight:700;color:#93c5fd;";
+        topBar.appendChild(crumb);
+
+        const backButton = document.createElement("button");
+        backButton.type = "button";
+        backButton.textContent = "↩ 返回目录";
+        backButton.style.cssText = [
+            "padding:8px 14px",
+            "border-radius:999px",
+            "border:1px solid rgba(148,163,184,0.18)",
+            "background:rgba(30,41,59,0.9)",
+            "color:#e2e8f0",
+            "cursor:pointer",
+            "font-size:13px",
+        ].join(";");
+        backButton.onclick = () => {
+            renderDirectory();
+            updateFooter();
+        };
+        topBar.appendChild(backButton);
+        contentWrap.appendChild(topBar);
+
+        const hero = document.createElement("div");
+        hero.style.cssText = [
+            "background:linear-gradient(135deg, rgba(29,78,216,0.16), rgba(14,165,233,0.08))",
+            "border:1px solid rgba(96,165,250,0.18)",
+            "border-radius:22px",
+            "padding:22px 22px 18px",
+            "margin-bottom:18px",
+        ].join(";");
+
+        const heroTitle = document.createElement("div");
+        heroTitle.textContent = `${step.emoji} ${step.title}`;
+        heroTitle.style.cssText = "font-size:24px;font-weight:800;line-height:1.3;margin-bottom:12px;color:#ffffff;";
+        hero.appendChild(heroTitle);
+
+        const heroSummary = document.createElement("div");
+        heroSummary.textContent = step.summary;
+        heroSummary.style.cssText = "font-size:15px;line-height:1.8;color:#dbeafe;";
+        hero.appendChild(heroSummary);
+        contentWrap.appendChild(hero);
+
+        (step.content || []).forEach((paragraph, paragraphIndex) => {
+            const card = document.createElement("div");
+            card.style.cssText = [
+                "background:rgba(15,23,42,0.9)",
+                "border:1px solid rgba(148,163,184,0.14)",
+                "border-radius:18px",
+                "padding:18px",
+                "margin-bottom:12px",
+            ].join(";");
+
+            const cardTitle = document.createElement("div");
+            cardTitle.textContent = `重点 ${paragraphIndex + 1}`;
+            cardTitle.style.cssText = "font-size:12px;font-weight:700;color:#60a5fa;letter-spacing:0.06em;margin-bottom:10px;";
+            card.appendChild(cardTitle);
+
+            const text = document.createElement("div");
+            text.textContent = paragraph;
+            text.style.cssText = "font-size:15px;line-height:1.85;color:#edf2f7;";
+            card.appendChild(text);
+            contentWrap.appendChild(card);
+        });
+
+        const tipsSection = createTutorialSection("✨ 实用提示", step.tips, "rgba(16,185,129,0.10)", "#6ee7b7");
+        if (tipsSection) {
+            contentWrap.appendChild(tipsSection);
+        }
+
+        const warningSection = createTutorialSection("⚠️ 注意事项", step.warnings, "rgba(245,158,11,0.10)", "#fbbf24");
+        if (warningSection) {
+            contentWrap.appendChild(warningSection);
+        }
+
+        updateFooter();
+    };
+
+    prevButton.onclick = () => {
+        if (currentStepIndex == null) {
+            return;
+        }
+        renderStep(Math.max(0, currentStepIndex - 1));
+    };
+
+    nextButton.onclick = () => {
+        if (currentStepIndex == null) {
+            renderStep(0);
+            return;
+        }
+        if (currentStepIndex < tutorial.steps.length - 1) {
+            renderStep(currentStepIndex + 1);
+        }
+    };
+
+    closeButton.onclick = closeModal;
+
+    overlay.onclick = (event) => {
+        if (event.target === overlay) {
+            closeModal();
+        }
+    };
+
+    modal.appendChild(header);
+    modal.appendChild(contentWrap);
+    modal.appendChild(footer);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    renderDirectory();
+    updateFooter();
 }
 
 function updateModelOptionsByRelay(node) {
@@ -404,37 +843,37 @@ function setupPromptWidget(node) {
     }
 }
 
-function addLinkButton(node) {
-    if (node.__cyLinkButton) {
+function addTopActionButtons(node) {
+    if (node.__cyTopButtons) {
         return;
     }
-    node.__cyLinkButton = true;
+    node.__cyTopButtons = true;
 
     const oldDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function (ctx) {
         if (oldDrawForeground) {
             oldDrawForeground.apply(this, arguments);
         }
-        const x = this.size[0] - 80;
-        const y = -25;
-        const width = 70;
-        const height = 18;
-        ctx.fillStyle = "#4a9eff";
-        ctx.beginPath();
-        ctx.roundRect(x, y, width, height, 3);
-        ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.font = "10px Arial";
-        ctx.textAlign = "center";
-        ctx.fillText(LINK_BUTTON_TEXT, x + width / 2, y + height / 2 + 4);
+
+        if (CY_NODE_TUTORIALS[this.comfyClass]) {
+            drawTopButton(ctx, getTutorialButtonRect(this), TUTORIAL_BUTTON_TEXT, "#16a34a");
+        }
+
+        drawTopButton(ctx, getLinkButtonRect(this), LINK_BUTTON_TEXT, "#4a9eff");
     };
 
     const oldMouseDown = node.onMouseDown;
     node.onMouseDown = function (event, pos) {
-        if (pos[0] >= this.size[0] - 80 && pos[1] <= 0) {
+        if (CY_NODE_TUTORIALS[this.comfyClass] && isPointInsideRect(pos, getTutorialButtonRect(this))) {
+            showTutorialModal(this.comfyClass);
+            return true;
+        }
+
+        if (isPointInsideRect(pos, getLinkButtonRect(this))) {
             window.open(LINK_BUTTON_URL, "_blank");
             return true;
         }
+
         return oldMouseDown ? oldMouseDown.apply(this, arguments) : undefined;
     };
 }
@@ -449,7 +888,7 @@ function maskKeyWidgets(node) {
 
     const masterKeyWidget = findWidgetByName(node, WIDGET_NAME_MASTER_KEY);
     if (masterKeyWidget?.inputEl) {
-        masterKeyWidget.label = "总Key（选填，用于自动生成Key1）";
+        masterKeyWidget.label = "总Key（选填，用于自动生成 Key1）";
         masterKeyWidget.inputEl.type = "password";
         masterKeyWidget.inputEl.autocomplete = "off";
     }
@@ -505,7 +944,7 @@ app.registerExtension({
             return;
         }
 
-        addLinkButton(node);
+        addTopActionButtons(node);
 
         setTimeout(() => {
             addCreateTokenButton(node);
